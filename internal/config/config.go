@@ -29,9 +29,10 @@ type Config struct {
 }
 
 type ListenConfig struct {
-	Host    string `json:"host"`
-	Port    int    `json:"port"`
-	Enabled bool   `json:"enabled"`
+	Host       string `json:"host"`
+	PublicHost string `json:"public_host,omitempty"`
+	Port       int    `json:"port"`
+	Enabled    bool   `json:"enabled"`
 }
 
 type Defaults struct {
@@ -57,18 +58,22 @@ type Node struct {
 }
 
 type DeployToken struct {
-	Token     string `json:"token"`
-	ExpiresAt string `json:"expires_at"`
-	Used      bool   `json:"used"`
+	Token        string `json:"token"`
+	Node         Node   `json:"node"`
+	ExpiresAt    string `json:"expires_at"`
+	Used         bool   `json:"used"`
+	Registered   bool   `json:"registered"`
+	RegisteredAt string `json:"registered_at,omitempty"`
 }
 
 func Default() Config {
 	return Config{
 		Version: 1,
 		Listen: ListenConfig{
-			Host:    "0.0.0.0",
-			Port:    18080,
-			Enabled: false,
+			Host:       "0.0.0.0",
+			PublicHost: "",
+			Port:       18080,
+			Enabled:    false,
 		},
 		Defaults: Defaults{
 			BindHost: "127.0.0.1",
@@ -184,6 +189,10 @@ func ValidateBindHost(host string) error {
 	return nil
 }
 
+func ValidateListenHost(host string) error {
+	return ValidateBindHost(host)
+}
+
 func CheckPortAvailable(host string, port int) error {
 	if err := ValidateBindHost(host); err != nil {
 		return err
@@ -270,4 +279,84 @@ func RemoveNode(cfg Config, name string) (Config, Node, error) {
 		}
 	}
 	return cfg, Node{}, fmt.Errorf("node not found: %s", name)
+}
+
+func SetListenConfig(cfg Config, listen ListenConfig) (Config, error) {
+	if err := ValidateListenHost(listen.Host); err != nil {
+		return cfg, err
+	}
+	if err := ValidatePort(listen.Port); err != nil {
+		return cfg, err
+	}
+
+	cfg.Listen.Host = listen.Host
+	cfg.Listen.PublicHost = listen.PublicHost
+	cfg.Listen.Port = listen.Port
+	cfg.Listen.Enabled = listen.Enabled
+	return cfg, nil
+}
+
+func SetListenEnabled(cfg Config, enabled bool) Config {
+	cfg.Listen.Enabled = enabled
+	return cfg
+}
+
+func AddDeployToken(cfg Config, token DeployToken) (Config, error) {
+	if token.Token == "" {
+		return cfg, errors.New("deploy token cannot be empty")
+	}
+	if token.ExpiresAt == "" {
+		return cfg, errors.New("deploy token expires_at cannot be empty")
+	}
+	if err := ValidateNode(cfg, token.Node); err != nil {
+		return cfg, err
+	}
+
+	for _, existing := range cfg.Tokens {
+		if existing.Token == token.Token {
+			return cfg, errors.New("deploy token already exists")
+		}
+		if existing.Used {
+			continue
+		}
+		if existing.Node.Name == token.Node.Name {
+			return cfg, fmt.Errorf("unused deploy token already exists for node: %s", token.Node.Name)
+		}
+		if existing.Node.BindHost == token.Node.BindHost && existing.Node.LocalPort == token.Node.LocalPort {
+			return cfg, fmt.Errorf("unused deploy token already reserves local port: %s:%d", token.Node.BindHost, token.Node.LocalPort)
+		}
+	}
+
+	cfg.Tokens = append(cfg.Tokens, token)
+	return cfg, nil
+}
+
+func UseDeployToken(cfg Config, tokenValue string, now time.Time) (Config, Node, error) {
+	for i, token := range cfg.Tokens {
+		if token.Token != tokenValue {
+			continue
+		}
+		if token.Used {
+			return cfg, Node{}, errors.New("deploy token already used")
+		}
+
+		expiresAt, err := time.Parse(time.RFC3339, token.ExpiresAt)
+		if err != nil {
+			return cfg, Node{}, fmt.Errorf("invalid deploy token expiry: %w", err)
+		}
+		if now.After(expiresAt) {
+			return cfg, Node{}, errors.New("deploy token expired")
+		}
+
+		next, err := AddNode(cfg, token.Node)
+		if err != nil {
+			return cfg, Node{}, err
+		}
+		next.Tokens[i].Used = true
+		next.Tokens[i].Registered = true
+		next.Tokens[i].RegisteredAt = now.UTC().Format(time.RFC3339)
+		return next, token.Node, nil
+	}
+
+	return cfg, Node{}, errors.New("deploy token not found")
 }

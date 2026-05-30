@@ -95,6 +95,15 @@ validate_mode() {
   esac
 }
 
+validate_registration_args() {
+  if [ -n "$TOKEN" ] && [ -z "$SERVER" ]; then
+    fail "server is required when token is provided"
+  fi
+  if [ -n "$SERVER" ] && [ -z "$TOKEN" ]; then
+    fail "token is required when server is provided"
+  fi
+}
+
 load_os_release() {
   if [ ! -r /etc/os-release ]; then
     fail "/etc/os-release not found, unsupported Linux distribution"
@@ -237,6 +246,7 @@ dispatch_child_script() {
 main() {
   parse_args "$@"
   validate_mode
+  validate_registration_args
   require_root
   load_os_release
   check_supported_os

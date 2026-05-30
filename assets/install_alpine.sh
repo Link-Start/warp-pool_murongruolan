@@ -68,9 +68,20 @@ maybe_install_warp() {
 }
 
 register_node_placeholder() {
-  if [ -n "$TOKEN" ] && [ -n "$SERVER" ]; then
-    log "deploy-token registration requested; registration implementation will be added in listen service stage"
+  if [ -z "$TOKEN" ] && [ -z "$SERVER" ]; then
+    return 0
   fi
+
+  if [ -z "$TOKEN" ] || [ -z "$SERVER" ]; then
+    fail "token and server must be provided together"
+  fi
+
+  log "registering node with WarpPool server"
+  run curl -fsS \
+    -X POST \
+    -H 'Content-Type: application/json' \
+    -d "{\"token\":\"$TOKEN\"}" \
+    "$SERVER/register"
 }
 
 main() {

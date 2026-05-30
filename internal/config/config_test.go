@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestValidatePort(t *testing.T) {
 	tests := []struct {
@@ -126,5 +129,66 @@ func TestFindAndRemoveNode(t *testing.T) {
 	}
 	if len(next.Nodes) != 0 {
 		t.Fatalf("expected no nodes, got %d", len(next.Nodes))
+	}
+}
+
+func TestDeployTokenLifecycle(t *testing.T) {
+	cfg := Default()
+	cfg.Listen.Enabled = true
+
+	var err error
+	cfg, err = AddDeployToken(cfg, DeployToken{
+		Token:     "token-1",
+		ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		Node: Node{
+			Name:      "nat1",
+			ExitMode:  ExitModeDirect,
+			Proxy:     ProxyMixed,
+			BindHost:  "127.0.0.1",
+			LocalPort: 10013,
+		},
+	})
+	if err != nil {
+		t.Fatalf("add token: %v", err)
+	}
+
+	next, node, err := UseDeployToken(cfg, "token-1", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("use token: %v", err)
+	}
+	if node.Name != "nat1" {
+		t.Fatalf("unexpected node: %s", node.Name)
+	}
+	if len(next.Nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(next.Nodes))
+	}
+	if !next.Tokens[0].Used || !next.Tokens[0].Registered {
+		t.Fatal("expected token to be used and registered")
+	}
+
+	if _, _, err := UseDeployToken(next, "token-1", time.Now().UTC()); err == nil {
+		t.Fatal("expected used token error")
+	}
+}
+
+func TestDeployTokenRejectsExpired(t *testing.T) {
+	cfg := Default()
+	cfg, err := AddDeployToken(cfg, DeployToken{
+		Token:     "token-1",
+		ExpiresAt: time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
+		Node: Node{
+			Name:      "nat1",
+			ExitMode:  ExitModeDirect,
+			Proxy:     ProxyMixed,
+			BindHost:  "127.0.0.1",
+			LocalPort: 10013,
+		},
+	})
+	if err != nil {
+		t.Fatalf("add token: %v", err)
+	}
+
+	if _, _, err := UseDeployToken(cfg, "token-1", time.Now().UTC()); err == nil {
+		t.Fatal("expected expired token error")
 	}
 }
