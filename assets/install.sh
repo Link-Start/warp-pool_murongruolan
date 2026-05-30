@@ -126,8 +126,8 @@ check_supported_os() {
       CHILD_SCRIPT="install_debian.sh"
       ;;
     ubuntu)
-      if [ "$major" -lt 22 ]; then
-        fail "unsupported Ubuntu version: $OS_VERSION, expected Ubuntu 22.04+"
+      if [ "$major" -lt 20 ]; then
+        fail "unsupported Ubuntu version: $OS_VERSION, expected Ubuntu 20.04+"
       fi
       CHILD_SCRIPT="install_ubuntu.sh"
       ;;
