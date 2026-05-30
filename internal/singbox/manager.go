@@ -40,6 +40,7 @@ type ManagerOptions struct {
 	ConfigPath string
 	PIDPath    string
 	Binary     string
+	BundleDir  string
 	Runner     CommandRunner
 	Runtime    string
 }
@@ -80,7 +81,7 @@ func Start(data []byte, opts ManagerOptions) (StartResult, error) {
 
 	pid, err := opts.Runner.StartBackground(opts.Binary, "run", "-c", opts.ConfigPath)
 	if err != nil {
-		return StartResult{}, fmt.Errorf("start sing-box: %w", err)
+		return StartResult{}, fmt.Errorf("start sing-box using %q: %w; put sing-box in bundled bin/ directory or pass --singbox-bin", opts.Binary, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(opts.PIDPath), 0o755); err != nil {
 		return StartResult{}, err
@@ -175,16 +176,49 @@ func managerDefaults(opts ManagerOptions) ManagerOptions {
 	if opts.PIDPath == "" {
 		opts.PIDPath = DefaultPIDPath()
 	}
-	if opts.Binary == "" {
-		opts.Binary = "sing-box"
-	}
 	if opts.Runner == nil {
 		opts.Runner = execRunner{}
 	}
 	if opts.Runtime == "" {
 		opts.Runtime = runtime.GOOS
 	}
+	if opts.Binary == "" {
+		opts.Binary = ResolveBinary(opts.BundleDir, opts.Runtime)
+	}
 	return opts
+}
+
+func ResolveBinary(bundleDir string, runtimeOS string) string {
+	name := "sing-box"
+	if runtimeOS == "windows" {
+		name += ".exe"
+	}
+
+	if bundleDir != "" {
+		candidate := filepath.Join(bundleDir, name)
+		if fileExists(candidate) {
+			return candidate
+		}
+	}
+
+	if exe, err := os.Executable(); err == nil {
+		base := filepath.Dir(exe)
+		for _, candidate := range []string{
+			filepath.Join(base, "bin", name),
+			filepath.Join(base, name),
+		} {
+			if fileExists(candidate) {
+				return candidate
+			}
+		}
+	}
+
+	return "sing-box"
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func defaultStateDir() string {

@@ -121,3 +121,20 @@ func TestStopKillsPID(t *testing.T) {
 		t.Fatalf("unexpected runs: %#v", runner.runs)
 	}
 }
+
+func TestResolveBinaryPrefersBundleDir(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sing-box")
+	if err := os.WriteFile(path, []byte("fake"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveBinary(dir, "linux"); got != path {
+		t.Fatalf("expected bundle binary %s, got %s", path, got)
+	}
+}
+
+func TestResolveBinaryFallsBackToPath(t *testing.T) {
+	if got := ResolveBinary(filepath.Join(t.TempDir(), "missing"), "linux"); got != "sing-box" {
+		t.Fatalf("expected PATH fallback, got %s", got)
+	}
+}
