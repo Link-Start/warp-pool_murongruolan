@@ -73,3 +73,58 @@ func TestValidateNodeRejectsDuplicatePort(t *testing.T) {
 		t.Fatal("expected duplicate port error")
 	}
 }
+
+func TestAddNodeAppliesDefaults(t *testing.T) {
+	cfg := Default()
+	node := Node{
+		Name:      "nat1",
+		LocalPort: 10013,
+	}
+
+	next, err := AddNode(cfg, node)
+	if err != nil {
+		t.Fatalf("add node: %v", err)
+	}
+
+	if len(next.Nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(next.Nodes))
+	}
+
+	got := next.Nodes[0]
+	if got.ExitMode != ExitModeDirect {
+		t.Fatalf("expected default exit mode %s, got %s", ExitModeDirect, got.ExitMode)
+	}
+	if got.Proxy != ProxyMixed {
+		t.Fatalf("expected default proxy %s, got %s", ProxyMixed, got.Proxy)
+	}
+	if got.BindHost != "127.0.0.1" {
+		t.Fatalf("expected default bind host, got %s", got.BindHost)
+	}
+	if got.CreatedAt == "" || got.LastUpdated == "" {
+		t.Fatal("expected timestamps")
+	}
+}
+
+func TestFindAndRemoveNode(t *testing.T) {
+	cfg := Default()
+	var err error
+	cfg, err = AddNode(cfg, Node{Name: "nat1", LocalPort: 10013})
+	if err != nil {
+		t.Fatalf("add node: %v", err)
+	}
+
+	if _, ok := FindNode(cfg, "nat1"); !ok {
+		t.Fatal("expected node to exist")
+	}
+
+	next, removed, err := RemoveNode(cfg, "nat1")
+	if err != nil {
+		t.Fatalf("remove node: %v", err)
+	}
+	if removed.Name != "nat1" {
+		t.Fatalf("unexpected removed node: %s", removed.Name)
+	}
+	if len(next.Nodes) != 0 {
+		t.Fatalf("expected no nodes, got %d", len(next.Nodes))
+	}
+}

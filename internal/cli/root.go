@@ -20,6 +20,7 @@ func NewRootCommand() *cobra.Command {
 
 	root.PersistentFlags().StringVar(&configPath, "config", "", "config file path")
 	root.AddCommand(newConfigCommand())
+	root.AddCommand(newNodeCommand())
 
 	return root
 }

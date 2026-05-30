@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 )
 
 const (
@@ -130,6 +131,24 @@ func Save(path string, cfg Config, force bool) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
+func SaveExisting(path string, cfg Config) error {
+	if path == "" {
+		path = DefaultPath()
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+
+	return os.WriteFile(path, data, 0o600)
+}
+
 func ValidatePort(port int) error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("port must be between 1 and 65535: %d", port)
@@ -207,4 +226,48 @@ func ValidateNode(cfg Config, node Node) error {
 	}
 
 	return nil
+}
+
+func AddNode(cfg Config, node Node) (Config, error) {
+	if node.ExitMode == "" {
+		node.ExitMode = cfg.Defaults.ExitMode
+	}
+	if node.Proxy == "" {
+		node.Proxy = cfg.Defaults.Proxy
+	}
+	if node.BindHost == "" {
+		node.BindHost = cfg.Defaults.BindHost
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if node.CreatedAt == "" {
+		node.CreatedAt = now
+	}
+	node.LastUpdated = now
+
+	if err := ValidateNode(cfg, node); err != nil {
+		return cfg, err
+	}
+
+	cfg.Nodes = append(cfg.Nodes, node)
+	return cfg, nil
+}
+
+func FindNode(cfg Config, name string) (Node, bool) {
+	for _, node := range cfg.Nodes {
+		if node.Name == name {
+			return node, true
+		}
+	}
+	return Node{}, false
+}
+
+func RemoveNode(cfg Config, name string) (Config, Node, error) {
+	for i, node := range cfg.Nodes {
+		if node.Name == name {
+			cfg.Nodes = append(cfg.Nodes[:i], cfg.Nodes[i+1:]...)
+			return cfg, node, nil
+		}
+	}
+	return cfg, Node{}, fmt.Errorf("node not found: %s", name)
 }
