@@ -1,0 +1,211 @@
+package singbox
+
+import (
+	"encoding/json"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+)
+
+type CommandRunner interface {
+	Run(name string, args ...string) ([]byte, error)
+	StartBackground(name string, args ...string) (int, error)
+}
+
+type execRunner struct{}
+
+func (execRunner) Run(name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	return cmd.CombinedOutput()
+}
+
+func (execRunner) StartBackground(name string, args ...string) (int, error) {
+	cmd := exec.Command(name, args...)
+	if err := cmd.Start(); err != nil {
+		return 0, err
+	}
+	pid := cmd.Process.Pid
+	go func() {
+		_ = cmd.Wait()
+	}()
+	return pid, nil
+}
+
+type ManagerOptions struct {
+	ConfigPath string
+	PIDPath    string
+	Binary     string
+	Runner     CommandRunner
+	Runtime    string
+}
+
+type StartResult struct {
+	ConfigPath string
+	PIDPath    string
+	Logs       []string
+}
+
+type StatusResult struct {
+	Running bool
+	PID     int
+	Message string
+}
+
+func WriteConfig(path string, data []byte) error {
+	if path == "" {
+		path = DefaultConfigPath()
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+func Start(data []byte, opts ManagerOptions) (StartResult, error) {
+	opts = managerDefaults(opts)
+	if err := checkInboundPorts(data); err != nil {
+		return StartResult{}, err
+	}
+	if err := WriteConfig(opts.ConfigPath, data); err != nil {
+		return StartResult{}, fmt.Errorf("write sing-box config: %w", err)
+	}
+	if status, _ := Status(opts); status.Running {
+		return StartResult{}, fmt.Errorf("sing-box already running with pid %d", status.PID)
+	}
+
+	pid, err := opts.Runner.StartBackground(opts.Binary, "run", "-c", opts.ConfigPath)
+	if err != nil {
+		return StartResult{}, fmt.Errorf("start sing-box: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(opts.PIDPath), 0o755); err != nil {
+		return StartResult{}, err
+	}
+	if err := os.WriteFile(opts.PIDPath, []byte(fmt.Sprintf("%d\n", pid)), 0o600); err != nil {
+		return StartResult{}, fmt.Errorf("write pid file: %w", err)
+	}
+
+	result := StartResult{
+		ConfigPath: opts.ConfigPath,
+		PIDPath:    opts.PIDPath,
+		Logs: []string{
+			"wrote sing-box config: " + opts.ConfigPath,
+			"started sing-box with config: " + opts.ConfigPath,
+		},
+	}
+	return result, nil
+}
+
+func checkInboundPorts(data []byte) error {
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("parse sing-box config for port check: %w", err)
+	}
+	for _, inbound := range cfg.Inbounds {
+		ln, err := net.Listen("tcp", net.JoinHostPort(inbound.Listen, strconv.Itoa(inbound.ListenPort)))
+		if err != nil {
+			return fmt.Errorf("local proxy port is not available for inbound %s: %s:%d: %w", inbound.Tag, inbound.Listen, inbound.ListenPort, err)
+		}
+		_ = ln.Close()
+	}
+	return nil
+}
+
+func Stop(opts ManagerOptions) (StatusResult, error) {
+	opts = managerDefaults(opts)
+	status, err := Status(opts)
+	if err != nil {
+		return status, err
+	}
+	if !status.Running {
+		return status, nil
+	}
+
+	if opts.Runtime == "windows" {
+		if _, err := opts.Runner.Run("taskkill", "/PID", strconv.Itoa(status.PID), "/T", "/F"); err != nil {
+			return status, fmt.Errorf("stop sing-box pid %d: %w", status.PID, err)
+		}
+	} else {
+		if _, err := opts.Runner.Run("kill", strconv.Itoa(status.PID)); err != nil {
+			return status, fmt.Errorf("stop sing-box pid %d: %w", status.PID, err)
+		}
+	}
+	_ = os.Remove(opts.PIDPath)
+	status.Running = false
+	status.Message = "stopped sing-box"
+	return status, nil
+}
+
+func Status(opts ManagerOptions) (StatusResult, error) {
+	opts = managerDefaults(opts)
+	data, err := os.ReadFile(opts.PIDPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return StatusResult{Message: "sing-box is not running"}, nil
+		}
+		return StatusResult{}, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return StatusResult{}, fmt.Errorf("invalid pid file %s: %w", opts.PIDPath, err)
+	}
+
+	if processRunning(pid, opts.Runtime, opts.Runner) {
+		return StatusResult{Running: true, PID: pid, Message: fmt.Sprintf("sing-box running with pid %d", pid)}, nil
+	}
+	return StatusResult{PID: pid, Message: fmt.Sprintf("stale pid file: %d", pid)}, nil
+}
+
+func DefaultConfigPath() string {
+	return filepath.Join(defaultStateDir(), "sing-box.json")
+}
+
+func DefaultPIDPath() string {
+	return filepath.Join(defaultStateDir(), "sing-box.pid")
+}
+
+func managerDefaults(opts ManagerOptions) ManagerOptions {
+	if opts.ConfigPath == "" {
+		opts.ConfigPath = DefaultConfigPath()
+	}
+	if opts.PIDPath == "" {
+		opts.PIDPath = DefaultPIDPath()
+	}
+	if opts.Binary == "" {
+		opts.Binary = "sing-box"
+	}
+	if opts.Runner == nil {
+		opts.Runner = execRunner{}
+	}
+	if opts.Runtime == "" {
+		opts.Runtime = runtime.GOOS
+	}
+	return opts
+}
+
+func defaultStateDir() string {
+	if runtime.GOOS == "windows" {
+		base := os.Getenv("ProgramData")
+		if base == "" {
+			base = "."
+		}
+		return filepath.Join(base, "warppool")
+	}
+	return "/var/lib/warppool"
+}
+
+func processRunning(pid int, runtimeOS string, runner CommandRunner) bool {
+	if pid <= 0 {
+		return false
+	}
+	if runtimeOS == "windows" {
+		out, err := runner.Run("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid))
+		return err == nil && strings.Contains(string(out), strconv.Itoa(pid))
+	}
+	_, err := runner.Run("kill", "-0", strconv.Itoa(pid))
+	return err == nil
+}
