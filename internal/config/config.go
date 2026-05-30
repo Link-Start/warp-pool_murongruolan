@@ -43,18 +43,25 @@ type Defaults struct {
 }
 
 type Node struct {
-	Name        string `json:"name"`
-	ExitMode    string `json:"exit_mode"`
-	Proxy       string `json:"proxy"`
-	BindHost    string `json:"bind_host"`
-	LocalPort   int    `json:"local_port"`
-	PublicIP    string `json:"public_ip,omitempty"`
-	Country     string `json:"country,omitempty"`
-	WGDevice    string `json:"wg_device,omitempty"`
-	WGAddress   string `json:"wg_address,omitempty"`
-	Endpoint    string `json:"endpoint,omitempty"`
-	CreatedAt   string `json:"created_at,omitempty"`
-	LastUpdated string `json:"last_updated,omitempty"`
+	Name               string `json:"name"`
+	ExitMode           string `json:"exit_mode"`
+	Proxy              string `json:"proxy"`
+	BindHost           string `json:"bind_host"`
+	LocalPort          int    `json:"local_port"`
+	PublicIP           string `json:"public_ip,omitempty"`
+	Country            string `json:"country,omitempty"`
+	WGDevice           string `json:"wg_device,omitempty"`
+	WGAddress          string `json:"wg_address,omitempty"`
+	WGServerAddress    string `json:"wg_server_address,omitempty"`
+	WGClientAddress    string `json:"wg_client_address,omitempty"`
+	WGListenPort       int    `json:"wg_listen_port,omitempty"`
+	WGServerPublicKey  string `json:"wg_server_public_key,omitempty"`
+	WGClientPublicKey  string `json:"wg_client_public_key,omitempty"`
+	WGClientPrivateKey string `json:"wg_client_private_key,omitempty"`
+	WGClientConfig     string `json:"wg_client_config,omitempty"`
+	Endpoint           string `json:"endpoint,omitempty"`
+	CreatedAt          string `json:"created_at,omitempty"`
+	LastUpdated        string `json:"last_updated,omitempty"`
 }
 
 type DeployToken struct {

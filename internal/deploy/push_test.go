@@ -12,6 +12,7 @@ func TestPushDryRunAddsNode(t *testing.T) {
 	next, result, err := Push(cfg, PushOptions{
 		DryRun:        true,
 		SkipPortCheck: true,
+		WGEndpoint:    "203.0.113.1",
 		Node: config.Node{
 			Name:      "nat1",
 			ExitMode:  config.ExitModeDirect,
@@ -48,6 +49,7 @@ func TestPushDryRunRejectsDuplicatePort(t *testing.T) {
 	_, _, err = Push(cfg, PushOptions{
 		DryRun:        true,
 		SkipPortCheck: true,
+		WGEndpoint:    "203.0.113.1",
 		Node: config.Node{
 			Name:      "nat2",
 			ExitMode:  config.ExitModeWarp,

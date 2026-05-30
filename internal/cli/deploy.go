@@ -67,6 +67,9 @@ func newDeployCommand() *cobra.Command {
 	cmd.Flags().StringVar(&opts.SSH.KeyPath, "ssh-key", "", "SSH private key path")
 	cmd.Flags().StringVar(&opts.RemoteDir, "remote-dir", "/tmp/warppool-install", "remote installer directory")
 	cmd.Flags().StringVar(&opts.AssetsDir, "assets-dir", "assets", "local assets directory")
+	cmd.Flags().StringVar(&opts.WGEndpoint, "wg-endpoint", "", "WireGuard endpoint host/IP, default SSH host")
+	cmd.Flags().IntVar(&opts.WGListenPort, "wg-listen-port", 51820, "WireGuard listen port")
+	cmd.Flags().BoolVar(&opts.SkipWGUp, "skip-wg-up", false, "write WireGuard config but do not start it")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "validate and show deploy plan without SSH")
 	cmd.Flags().BoolVar(&opts.SkipPortCheck, "skip-port-check", false, "skip system port availability check")
 
