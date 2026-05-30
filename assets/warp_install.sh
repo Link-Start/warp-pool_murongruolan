@@ -42,8 +42,8 @@ install_cloudflare_repo_debian_like() {
   curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor -o "$keyring"
   echo "deb [signed-by=$keyring] https://pkg.cloudflareclient.com/ $codename main" >"$list"
 
-  apt-get update
-  apt-get install -y cloudflare-warp
+  env DEBIAN_FRONTEND=noninteractive apt-get update
+  env DEBIAN_FRONTEND=noninteractive apt-get install -y cloudflare-warp
 }
 
 register_and_connect() {

@@ -46,8 +46,8 @@ parse_args() {
 
 install_packages() {
   log "installing WireGuard and base tools"
-  run apt-get update
-  run apt-get install -y wireguard wireguard-tools iproute2 iptables curl ca-certificates gnupg
+  run env DEBIAN_FRONTEND=noninteractive apt-get update
+  run env DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard wireguard-tools iproute2 iptables curl ca-certificates gnupg
 }
 
 configure_wireguard_placeholder() {
