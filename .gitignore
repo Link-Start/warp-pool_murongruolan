@@ -1,0 +1,20 @@
+# Local planning notes; do not publish.
+ARCHITECTURE.md
+MVP.md
+DEV_PLAN.md
+ARCHITECTURE.md
+
+# Build outputs.
+bin/
+dist/
+*.exe
+
+# OS/editor files.
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local runtime state.
+.warppool/
+*.log
