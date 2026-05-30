@@ -14,6 +14,8 @@ type Plan struct {
 	Device           string
 	ListenPort       int
 	Endpoint         string
+	EgressInterface  string
+	EnableForwarding bool
 	ServerAddress    string
 	ClientAddress    string
 	ServerPrivateKey string
@@ -25,10 +27,12 @@ type Plan struct {
 }
 
 type Options struct {
-	Node       config.Node
-	CIDR       string
-	Endpoint   string
-	ListenPort int
+	Node             config.Node
+	CIDR             string
+	Endpoint         string
+	ListenPort       int
+	EgressInterface  string
+	EnableForwarding bool
 }
 
 func BuildPlan(cfg config.Config, opts Options) (Plan, error) {
@@ -61,6 +65,8 @@ func BuildPlan(cfg config.Config, opts Options) (Plan, error) {
 		Device:           device,
 		ListenPort:       opts.ListenPort,
 		Endpoint:         fmt.Sprintf("%s:%d", opts.Endpoint, opts.ListenPort),
+		EgressInterface:  opts.EgressInterface,
+		EnableForwarding: opts.EnableForwarding,
 		ServerAddress:    serverIP + "/30",
 		ClientAddress:    clientIP + "/30",
 		ServerPrivateKey: serverKey.PrivateKey,
@@ -90,16 +96,21 @@ func ApplyPlan(node config.Node, plan Plan) config.Node {
 
 func RenderServerConfig(plan Plan) string {
 	clientIP := strings.TrimSuffix(plan.ClientAddress, "/30")
+	var hooks string
+	if plan.EnableForwarding {
+		hooks = RenderDirectForwardingHooks(plan)
+	}
 	return fmt.Sprintf(`[Interface]
 PrivateKey = %s
 Address = %s
 ListenPort = %d
 SaveConfig = false
+%s
 
 [Peer]
 PublicKey = %s
 AllowedIPs = %s/32
-`, plan.ServerPrivateKey, plan.ServerAddress, plan.ListenPort, plan.ClientPublicKey, clientIP)
+`, plan.ServerPrivateKey, plan.ServerAddress, plan.ListenPort, hooks, plan.ClientPublicKey, clientIP)
 }
 
 func RenderClientConfig(plan Plan) string {
@@ -183,4 +194,13 @@ func AllocatePair(cfg config.Config, cidr string) (string, string, error) {
 
 func uint32ToIP(value uint32) string {
 	return net.IPv4(byte(value>>24), byte(value>>16), byte(value>>8), byte(value)).String()
+}
+
+func RenderDirectForwardingHooks(plan Plan) string {
+	clientIP := strings.TrimSuffix(plan.ClientAddress, "/30")
+	if plan.EgressInterface == "" {
+		return fmt.Sprintf("PostUp = sysctl -w net.ipv4.ip_forward=1; iptables -C FORWARD -i %%i -j ACCEPT 2>/dev/null || iptables -A FORWARD -i %%i -j ACCEPT; iptables -C FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT\nPostDown = iptables -D FORWARD -i %%i -j ACCEPT 2>/dev/null || true; iptables -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true")
+	}
+
+	return fmt.Sprintf("PostUp = sysctl -w net.ipv4.ip_forward=1; iptables -C FORWARD -i %%i -j ACCEPT 2>/dev/null || iptables -A FORWARD -i %%i -j ACCEPT; iptables -C FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -C POSTROUTING -s %s/32 -o %s -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s %s/32 -o %s -j MASQUERADE\nPostDown = iptables -D FORWARD -i %%i -j ACCEPT 2>/dev/null || true; iptables -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true; iptables -t nat -D POSTROUTING -s %s/32 -o %s -j MASQUERADE 2>/dev/null || true", clientIP, plan.EgressInterface, clientIP, plan.EgressInterface, clientIP, plan.EgressInterface)
 }

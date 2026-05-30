@@ -21,15 +21,16 @@ type SSHOptions struct {
 }
 
 type PushOptions struct {
-	SSH           SSHOptions
-	Node          config.Node
-	DryRun        bool
-	RemoteDir     string
-	AssetsDir     string
-	WGEndpoint    string
-	WGListenPort  int
-	SkipWGUp      bool
-	SkipPortCheck bool
+	SSH            SSHOptions
+	Node           config.Node
+	DryRun         bool
+	RemoteDir      string
+	AssetsDir      string
+	WGEndpoint     string
+	WGListenPort   int
+	SkipWGUp       bool
+	SkipForwarding bool
+	SkipPortCheck  bool
 }
 
 type PushResult struct {
@@ -70,23 +71,30 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	}
 
 	result := PushResult{Node: opts.Node}
-	wgPlan, err := wireguard.BuildPlan(cfg, wireguard.Options{
-		Node:       opts.Node,
-		Endpoint:   opts.WGEndpoint,
-		ListenPort: opts.WGListenPort,
-	})
-	if err != nil {
-		return cfg, result, err
+	wgOptions := wireguard.Options{
+		Node:             opts.Node,
+		Endpoint:         opts.WGEndpoint,
+		ListenPort:       opts.WGListenPort,
+		EnableForwarding: opts.Node.ExitMode == config.ExitModeDirect && !opts.SkipForwarding,
 	}
-	opts.Node = wireguard.ApplyPlan(opts.Node, wgPlan)
-	result.Node = opts.Node
 
 	if opts.DryRun {
+		if wgOptions.EnableForwarding {
+			wgOptions.EgressInterface = "<egress>"
+		}
+		wgPlan, err := wireguard.BuildPlan(cfg, wgOptions)
+		if err != nil {
+			return cfg, result, err
+		}
+		result.Node = wireguard.ApplyPlan(opts.Node, wgPlan)
 		result.Logs = append(result.Logs, "dry-run: skip ssh connect")
 		result.Logs = append(result.Logs, fmt.Sprintf("dry-run: upload assets to %s", opts.RemoteDir))
 		result.Logs = append(result.Logs, fmt.Sprintf("dry-run: run bash %s/install.sh --dry-run mode=%s", opts.RemoteDir, opts.Node.ExitMode))
 		result.Logs = append(result.Logs, fmt.Sprintf("dry-run: write WireGuard config /etc/wireguard/%s.conf", wgPlan.Device))
 		result.Logs = append(result.Logs, fmt.Sprintf("dry-run: run wg-quick up %s", wgPlan.Device))
+		if wgOptions.EnableForwarding {
+			result.Logs = append(result.Logs, "dry-run: enable IPv4 forwarding and direct MASQUERADE")
+		}
 		return cfg, result, nil
 	}
 
@@ -118,6 +126,22 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	if err != nil {
 		return cfg, result, err
 	}
+
+	if wgOptions.EnableForwarding {
+		egress, err := detectEgressInterface(client)
+		if err != nil {
+			return cfg, result, err
+		}
+		wgOptions.EgressInterface = egress
+		result.Logs = append(result.Logs, "detected egress interface: "+egress)
+	}
+
+	wgPlan, err := wireguard.BuildPlan(cfg, wgOptions)
+	if err != nil {
+		return cfg, result, err
+	}
+	opts.Node = wireguard.ApplyPlan(opts.Node, wgPlan)
+	result.Node = opts.Node
 
 	if err := configureRemoteWireGuard(client, wgPlan, opts.SkipWGUp, &result); err != nil {
 		return cfg, result, err
@@ -161,6 +185,12 @@ func configureRemoteWireGuard(client *sshclient.Client, plan wireguard.Plan, ski
 	if _, err := client.Run("mkdir -p /etc/wireguard"); err != nil {
 		return err
 	}
+	if plan.EnableForwarding {
+		if _, err := client.Run("mkdir -p /etc/sysctl.d && printf 'net.ipv4.ip_forward=1\\n' >/etc/sysctl.d/99-warppool.conf && sysctl -w net.ipv4.ip_forward=1"); err != nil {
+			return err
+		}
+		result.Logs = append(result.Logs, "enabled IPv4 forwarding")
+	}
 
 	remotePath := "/etc/wireguard/" + plan.Device + ".conf"
 	if err := client.Upload(remotePath, []byte(plan.ServerConfig), "0600"); err != nil {
@@ -193,4 +223,16 @@ func configureRemoteWireGuard(client *sshclient.Client, plan wireguard.Plan, ski
 
 	result.Logs = append(result.Logs, "WireGuard started: "+plan.Device)
 	return nil
+}
+
+func detectEgressInterface(client *sshclient.Client) (string, error) {
+	result, err := client.Run("ip route show default 0.0.0.0/0 | awk 'NR==1 {for (i=1;i<=NF;i++) if ($i==\"dev\") {print $(i+1); exit}}'")
+	if err != nil {
+		return "", err
+	}
+	iface := strings.TrimSpace(result.Stdout)
+	if iface == "" {
+		return "", fmt.Errorf("cannot detect default egress interface")
+	}
+	return iface, nil
 }

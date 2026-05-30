@@ -52,3 +52,29 @@ func TestBuildPlan(t *testing.T) {
 		t.Fatalf("client config missing endpoint:\n%s", plan.ClientConfig)
 	}
 }
+
+func TestBuildPlanWithDirectForwarding(t *testing.T) {
+	cfg := config.Default()
+	plan, err := BuildPlan(cfg, Options{
+		Node: config.Node{
+			Name: "nat-1",
+		},
+		Endpoint:         "203.0.113.1",
+		EgressInterface:  "eth0",
+		EnableForwarding: true,
+	})
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+
+	for _, want := range []string{
+		"PostUp = sysctl -w net.ipv4.ip_forward=1",
+		"iptables -A FORWARD -i %i -j ACCEPT",
+		"iptables -t nat -A POSTROUTING -s 10.200.0.2/32 -o eth0 -j MASQUERADE",
+		"PostDown = iptables -D FORWARD -i %i -j ACCEPT",
+	} {
+		if !strings.Contains(plan.ServerConfig, want) {
+			t.Fatalf("server config missing %q:\n%s", want, plan.ServerConfig)
+		}
+	}
+}
