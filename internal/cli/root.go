@@ -25,6 +25,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newExportCommand())
 	root.AddCommand(newListenCommand())
 	root.AddCommand(newNodeCommand())
+	root.AddCommand(newWGCommand())
 
 	return root
 }

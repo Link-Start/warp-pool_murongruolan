@@ -59,6 +59,8 @@ type Node struct {
 	WGClientPublicKey  string `json:"wg_client_public_key,omitempty"`
 	WGClientPrivateKey string `json:"wg_client_private_key,omitempty"`
 	WGClientConfig     string `json:"wg_client_config,omitempty"`
+	WGLocalDevice      string `json:"wg_local_device,omitempty"`
+	WGLocalConfigPath  string `json:"wg_local_config_path,omitempty"`
 	Endpoint           string `json:"endpoint,omitempty"`
 	CreatedAt          string `json:"created_at,omitempty"`
 	LastUpdated        string `json:"last_updated,omitempty"`
@@ -276,6 +278,26 @@ func FindNode(cfg Config, name string) (Node, bool) {
 		}
 	}
 	return Node{}, false
+}
+
+func UpdateNode(cfg Config, node Node) (Config, error) {
+	if node.Name == "" {
+		return cfg, errors.New("node name cannot be empty")
+	}
+
+	for i, existing := range cfg.Nodes {
+		if existing.Name != node.Name {
+			continue
+		}
+		if node.CreatedAt == "" {
+			node.CreatedAt = existing.CreatedAt
+		}
+		node.LastUpdated = time.Now().UTC().Format(time.RFC3339)
+		cfg.Nodes[i] = node
+		return cfg, nil
+	}
+
+	return cfg, fmt.Errorf("node not found: %s", node.Name)
 }
 
 func RemoveNode(cfg Config, name string) (Config, Node, error) {

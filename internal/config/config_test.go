@@ -132,6 +132,36 @@ func TestFindAndRemoveNode(t *testing.T) {
 	}
 }
 
+func TestUpdateNode(t *testing.T) {
+	cfg := Default()
+	var err error
+	cfg, err = AddNode(cfg, Node{Name: "nat1", LocalPort: 10013})
+	if err != nil {
+		t.Fatalf("add node: %v", err)
+	}
+
+	node, ok := FindNode(cfg, "nat1")
+	if !ok {
+		t.Fatal("expected node")
+	}
+	node.WGLocalDevice = "wpnat1-cli"
+
+	next, err := UpdateNode(cfg, node)
+	if err != nil {
+		t.Fatalf("update node: %v", err)
+	}
+	got, ok := FindNode(next, "nat1")
+	if !ok {
+		t.Fatal("expected updated node")
+	}
+	if got.WGLocalDevice != "wpnat1-cli" {
+		t.Fatalf("unexpected local device: %s", got.WGLocalDevice)
+	}
+	if got.CreatedAt == "" || got.LastUpdated == "" {
+		t.Fatal("expected timestamps")
+	}
+}
+
 func TestDeployTokenLifecycle(t *testing.T) {
 	cfg := Default()
 	cfg.Listen.Enabled = true
