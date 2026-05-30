@@ -2,6 +2,7 @@ package wireguard
 
 import (
 	"fmt"
+	"hash/fnv"
 	"net"
 	"strings"
 
@@ -145,10 +146,17 @@ func SafeDeviceName(name string) string {
 		out = "wp-node"
 	}
 	if len(out) > 15 {
-		out = out[:15]
-		out = strings.TrimRight(out, "-")
+		suffix := shortHash(name)
+		prefixLen := 15 - len(suffix) - 1
+		out = strings.TrimRight(out[:prefixLen], "-") + "-" + suffix
 	}
 	return out
+}
+
+func shortHash(value string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(value))
+	return fmt.Sprintf("%04x", h.Sum32()&0xffff)
 }
 
 func AllocatePair(cfg config.Config, cidr string) (string, string, error) {

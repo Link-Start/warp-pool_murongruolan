@@ -90,6 +90,7 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 		result.Logs = append(result.Logs, "dry-run: skip ssh connect")
 		result.Logs = append(result.Logs, fmt.Sprintf("dry-run: upload assets to %s", opts.RemoteDir))
 		result.Logs = append(result.Logs, fmt.Sprintf("dry-run: run bash %s/install.sh --dry-run mode=%s", opts.RemoteDir, opts.Node.ExitMode))
+		result.Logs = append(result.Logs, fmt.Sprintf("dry-run: run WireGuard preflight for %s", wgPlan.Device))
 		result.Logs = append(result.Logs, fmt.Sprintf("dry-run: write WireGuard config /etc/wireguard/%s.conf", wgPlan.Device))
 		result.Logs = append(result.Logs, fmt.Sprintf("dry-run: run wg-quick up %s", wgPlan.Device))
 		if wgOptions.EnableForwarding {
@@ -143,7 +144,7 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	opts.Node = wireguard.ApplyPlan(opts.Node, wgPlan)
 	result.Node = opts.Node
 
-	if err := configureRemoteWireGuard(client, wgPlan, opts.SkipWGUp, &result); err != nil {
+	if err := configureRemoteWireGuard(client, wgPlan, opts.RemoteDir, opts.SkipWGUp, &result); err != nil {
 		return cfg, result, err
 	}
 
@@ -181,8 +182,11 @@ func shellPath(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
-func configureRemoteWireGuard(client *sshclient.Client, plan wireguard.Plan, skipUp bool, result *PushResult) error {
+func configureRemoteWireGuard(client *sshclient.Client, plan wireguard.Plan, remoteDir string, skipUp bool, result *PushResult) error {
 	if _, err := client.Run("mkdir -p /etc/wireguard"); err != nil {
+		return err
+	}
+	if err := runWireGuardPreflight(client, plan, remoteDir, result); err != nil {
 		return err
 	}
 	if plan.EnableForwarding {
@@ -223,6 +227,48 @@ func configureRemoteWireGuard(client *sshclient.Client, plan wireguard.Plan, ski
 
 	result.Logs = append(result.Logs, "WireGuard started: "+plan.Device)
 	return nil
+}
+
+func runWireGuardPreflight(client *sshclient.Client, plan wireguard.Plan, remoteDir string, result *PushResult) error {
+	command := wireGuardPreflightCommand(wireGuardPreflightOptions{
+		RemoteDir:     remoteDir,
+		Device:        plan.Device,
+		ServerAddress: plan.ServerAddress,
+		ClientAddress: plan.ClientAddress,
+		ListenPort:    plan.ListenPort,
+	})
+	remoteResult, err := client.Run(command)
+	if remoteResult.Stdout != "" {
+		result.Logs = append(result.Logs, remoteResult.Stdout)
+	}
+	if remoteResult.Stderr != "" {
+		result.Logs = append(result.Logs, remoteResult.Stderr)
+	}
+	if err != nil {
+		return fmt.Errorf("wireguard preflight failed: %w", err)
+	}
+	return nil
+}
+
+type wireGuardPreflightOptions struct {
+	RemoteDir     string
+	Device        string
+	ServerAddress string
+	ClientAddress string
+	ListenPort    int
+}
+
+func wireGuardPreflightCommand(opts wireGuardPreflightOptions) string {
+	scriptPath := filepath.ToSlash(filepath.Join(opts.RemoteDir, "wg_preflight.sh"))
+	return fmt.Sprintf(
+		"if [ -x %s ]; then bash %s %s %s %s %s auto_fix=true; else echo '[WarpPool][wg-preflight][ERROR] wg_preflight.sh not found in deploy assets' >&2; exit 1; fi",
+		shellPath(scriptPath),
+		shellPath(scriptPath),
+		shellPath("device="+opts.Device),
+		shellPath("server_addr="+opts.ServerAddress),
+		shellPath("client_addr="+opts.ClientAddress),
+		shellPath(fmt.Sprintf("listen_port=%d", opts.ListenPort)),
+	)
 }
 
 func detectEgressInterface(client *sshclient.Client) (string, error) {

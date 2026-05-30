@@ -33,6 +33,9 @@ func TestPushDryRunAddsNode(t *testing.T) {
 	if !containsLog(result.Logs, "dry-run: enable IPv4 forwarding and direct MASQUERADE") {
 		t.Fatalf("expected direct forwarding dry-run log, got %#v", result.Logs)
 	}
+	if !containsLog(result.Logs, "dry-run: run WireGuard preflight") {
+		t.Fatalf("expected preflight dry-run log, got %#v", result.Logs)
+	}
 }
 
 func TestPushDryRunWarpSkipsDirectForwarding(t *testing.T) {
@@ -85,6 +88,31 @@ func TestPushDryRunRejectsDuplicatePort(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected duplicate port error")
+	}
+}
+
+func TestRunWireGuardPreflightCommandUsesRemoteDir(t *testing.T) {
+	command := wireGuardPreflightCommand(wireGuardPreflightOptions{
+		RemoteDir:     "/tmp/custom dir",
+		Device:        "wpnat-1",
+		ServerAddress: "10.200.0.1/30",
+		ClientAddress: "10.200.0.2/30",
+		ListenPort:    51821,
+	})
+
+	for _, want := range []string{
+		"'/tmp/custom dir/wg_preflight.sh'",
+		"'device=wpnat-1'",
+		"'server_addr=10.200.0.1/30'",
+		"'client_addr=10.200.0.2/30'",
+		"'listen_port=51821'",
+		"auto_fix=true",
+		"wg_preflight.sh not found in deploy assets",
+		"exit 1",
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("preflight command missing %q:\n%s", want, command)
+		}
 	}
 }
 

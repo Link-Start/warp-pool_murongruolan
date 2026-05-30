@@ -53,6 +53,20 @@ func TestBuildPlan(t *testing.T) {
 	}
 }
 
+func TestSafeDeviceNameAddsHashWhenTruncated(t *testing.T) {
+	first := SafeDeviceName("nat-preflight-1")
+	second := SafeDeviceName("nat-preflight-2")
+	if first == second {
+		t.Fatalf("expected long names to stay unique, both got %s", first)
+	}
+	if len(first) > 15 || len(second) > 15 {
+		t.Fatalf("device names exceed Linux limit: %s %s", first, second)
+	}
+	if !strings.HasPrefix(first, "wpnat-pref") || !strings.HasPrefix(second, "wpnat-pref") {
+		t.Fatalf("unexpected device names: %s %s", first, second)
+	}
+}
+
 func TestBuildPlanWithDirectForwarding(t *testing.T) {
 	cfg := config.Default()
 	plan, err := BuildPlan(cfg, Options{

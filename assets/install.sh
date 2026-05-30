@@ -186,6 +186,21 @@ check_ip_stack() {
   log "warning: command 'ip' not found, IPv4/IPv6 check skipped"
 }
 
+check_existing_wireguard_state() {
+  if ! command -v wg >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local interfaces
+  interfaces="$(wg show interfaces 2>/dev/null || true)"
+  if [ -z "$interfaces" ]; then
+    return 0
+  fi
+
+  log "warning: existing WireGuard interfaces detected: $interfaces"
+  log "warning: WarpPool deploy will run a precise WireGuard preflight before writing its config"
+}
+
 script_dir() {
   cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd
 }
@@ -253,6 +268,7 @@ main() {
   check_arch
   check_tun
   check_ip_stack
+  check_existing_wireguard_state
 
   log "detected OS: $OS_ID $OS_VERSION"
   log "detected arch: $ARCH"
