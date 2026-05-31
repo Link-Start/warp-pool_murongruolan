@@ -4,8 +4,6 @@ WireGuard-based multi-exit proxy management for small VPS and NAT VPS nodes.
 
 [English](README.md) | [简体中文](README_CN.md)
 
-> WarpPool is an MVP-stage CLI project. Push deployment is recommended when the main server can SSH into the exit node. Deploy Token is recommended when the exit node should pull its configuration from the main server.
-
 ## Table of Contents
 
 - [Overview](#overview)
@@ -251,7 +249,7 @@ from:
 curl --socks5 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace
 ```
 
-MVP limitation: WARP forwarding is TCP-first. UDP and IPv6 are not promised as complete yet.
+Current limitation: WARP forwarding is TCP-first. UDP and IPv6 are not promised as complete yet.
 
 ---
 
@@ -366,7 +364,7 @@ warppool ping nat01 # Test WireGuard connectivity to nat01
 warppool speedtest --proxy http://127.0.0.1:10133 # Run a simple speed test through a proxy
 ```
 
-MVP note: `speedtest` is safest with HTTP proxy URLs. Full SOCKS proxy handling is planned before stable release.
+Note: `speedtest` is safest with HTTP proxy URLs. Full SOCKS proxy handling is planned.
 
 ### Uninstall
 
@@ -459,4 +457,4 @@ The script checks the working tree, updates `VERSION`, creates a Chinese commit,
 - No database.
 - No multi-user permission model.
 - No remote Agent.
-- `upgrade` is a safe placeholder command in MVP.
+- `upgrade` is currently a safe placeholder command.

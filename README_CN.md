@@ -4,8 +4,6 @@
 
 [English](README.md) | [简体中文](README_CN.md)
 
-> WarpPool 当前处于 MVP 阶段。如果主服务器可以 SSH 到出口节点，推荐使用 Push 部署；如果希望出口节点主动拉取配置，推荐使用 Deploy Token。
-
 ## 目录
 
 - [项目概述](#项目概述)
@@ -221,7 +219,7 @@ warppool deploy \
 curl --socks5 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace
 ```
 
-MVP 限制：当前 WARP 转发以 TCP 为主，暂不承诺 UDP / IPv6 完整支持。
+当前限制：WARP 转发以 TCP 为主，暂不承诺 UDP / IPv6 完整支持。
 
 ---
 
