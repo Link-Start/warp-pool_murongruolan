@@ -84,7 +84,7 @@ func newDeployTokenCreateCommand() *cobra.Command {
 			}
 			serverURL := listenURL(publicHost, cfg.Listen.Port)
 			if repoBaseURL == "" {
-				repoBaseURL = "https://raw.githubusercontent.com/murongruolan/warp-pool/developer/assets"
+				repoBaseURL = "https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets"
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "token expires at: %s\n", expiresAt.Format(time.RFC3339))

@@ -135,11 +135,12 @@ wget -qO- ···
 ```
 安装脚本会：
 
-1. 检测系统和 CPU 架构。
-2. 安装基础依赖。
-3. 下载并安装匹配的 WarpPool Release 包。
-4. 安装 sing-box。
-5. 创建 systemd 服务。
+1. 询问交互语言：简体中文或 English。
+2. 检测系统和 CPU 架构。
+3. 安装基础依赖。
+4. 下载并安装匹配的 WarpPool Release 包。
+5. 安装 sing-box。
+6. 创建 systemd 服务。
 
 
 非交互安装

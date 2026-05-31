@@ -12,7 +12,8 @@ SERVER_PORT_SET="false"
 ENDPOINT=""
 WG_LISTEN_PORT="51820"
 WG_ENDPOINT_PORT=""
-BASE_URL="${WARPOOL_INSTALL_BASE_URL:-https://raw.githubusercontent.com/murongruolan/warp-pool/developer/assets}"
+BASE_URL="${WARPPOOL_INSTALL_BASE_URL:-${WARPOOL_INSTALL_BASE_URL:-https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets}}"
+LANGUAGE="${WARPPOOL_LANG:-${WARPOOL_LANG:-}}"
 DOWNLOAD_DIR=""
 
 log() {
@@ -22,6 +23,22 @@ log() {
 fail() {
   printf '[WarpPool][ERROR] %s\n' "$*" >&2
   exit 1
+}
+
+text() {
+  if [ "${LANGUAGE:-en}" = "zh" ]; then
+    printf '%s' "$2"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+log_i() {
+  log "$(text "$1" "$2")"
+}
+
+fail_i() {
+  fail "$(text "$1" "$2")"
 }
 
 on_error() {
@@ -46,13 +63,14 @@ Examples:
   bash install.sh token=xxxxx server=http://1.2.3.4:18080
   bash install.sh token=xxxxx server=http://1.2.3.4:8080 endpoint=5.6.7.8 wg_listen_port=51820 wg_endpoint_port=30021
   bash install.sh base_url=https://example.com/assets
+  bash install.sh lang=zh
   bash install.sh --dry-run mode=direct
 USAGE
 }
 
 run() {
   if [ "$DRY_RUN" = "true" ]; then
-    log "dry-run: $*"
+    log_i "dry-run: $*" "dry-run：$*"
     return 0
   fi
   "$@"
@@ -97,8 +115,11 @@ parse_args() {
       base_url=*)
         BASE_URL="${arg#base_url=}"
         ;;
+      lang=*|language=*)
+        LANGUAGE="${arg#*=}"
+        ;;
       *)
-        fail "unknown argument: $arg"
+        fail_i "unknown argument: $arg" "未知参数：$arg"
         ;;
     esac
   done
@@ -134,7 +155,7 @@ default_registration_port_for_host() {
 
 require_root() {
   if [ "$(id -u)" -ne 0 ]; then
-    fail "installer must run as root"
+    fail_i "installer must run as root" "安装脚本必须以 root 权限运行"
   fi
 }
 
@@ -143,13 +164,61 @@ validate_mode() {
     direct|warp)
       ;;
     *)
-      fail "unsupported mode: $MODE, expected direct or warp"
+      fail_i "unsupported mode: $MODE, expected direct or warp" "不支持的模式：$MODE，应为 direct 或 warp"
       ;;
   esac
 }
 
 is_interactive() {
   [ -r /dev/tty ] && [ -w /dev/tty ] && ( : </dev/tty >/dev/tty ) 2>/dev/null
+}
+
+normalize_language() {
+  case "$1" in
+    zh|zh_CN|zh-CN|cn|CN|1)
+      printf 'zh\n'
+      ;;
+    en|en_US|en-US|english|English|2)
+      printf 'en\n'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+select_language() {
+  local choice normalized
+  if [ -n "$LANGUAGE" ]; then
+    normalized="$(normalize_language "$LANGUAGE")" || fail "invalid language: $LANGUAGE, expected zh or en / 语言无效：$LANGUAGE，应为 zh 或 en"
+    LANGUAGE="$normalized"
+    return 0
+  fi
+  if ! is_interactive; then
+    LANGUAGE="en"
+    return 0
+  fi
+
+  while true; do
+    printf '请选择语言 / Please select language:\n' >/dev/tty
+    printf '  1. 简体中文\n' >/dev/tty
+    printf '  2. English\n' >/dev/tty
+    printf '选择 / Select [1]: ' >/dev/tty
+    read -r choice </dev/tty
+    case "$choice" in
+      ""|1)
+        LANGUAGE="zh"
+        return 0
+        ;;
+      2)
+        LANGUAGE="en"
+        return 0
+        ;;
+      *)
+        printf '无效选择 / Invalid selection\n' >/dev/tty
+        ;;
+    esac
+  done
 }
 
 choose_mode() {
@@ -162,10 +231,14 @@ choose_mode() {
 
   local choice
   while true; do
-    printf 'WarpPool node exit mode:\n' >/dev/tty
+    if [ "$LANGUAGE" = "zh" ]; then
+      printf 'WarpPool 节点出口模式：\n' >/dev/tty
+    else
+      printf 'WarpPool node exit mode:\n' >/dev/tty
+    fi
     printf '  1. direct\n' >/dev/tty
     printf '  2. warp\n' >/dev/tty
-    printf 'Select [1]: ' >/dev/tty
+    printf '%s' "$(text "Select [1]: " "选择 [1]: ")" >/dev/tty
     read -r choice </dev/tty
     case "$choice" in
       ""|1)
@@ -177,7 +250,7 @@ choose_mode() {
         return 0
         ;;
       *)
-        printf '[WarpPool] invalid selection\n' >/dev/tty
+        printf '[WarpPool] %s\n' "$(text "invalid selection" "无效选择")" >/dev/tty
         ;;
     esac
   done
@@ -196,10 +269,10 @@ choose_registration_server() {
   fi
 
   local input port
-  printf 'Main server IP/domain for auto registration (Enter to skip): ' >/dev/tty
+  printf '%s' "$(text "Main server IP/domain for auto registration (Enter to skip): " "主服务器 IP/域名，用于自动注册（回车跳过）: ")" >/dev/tty
   read -r input </dev/tty
   if [ -z "$input" ]; then
-    log "main server address skipped; this run will only install node dependencies"
+    log_i "main server address skipped; this run will only install node dependencies" "已跳过主服务器地址；本次只安装节点依赖"
     return 0
   fi
   SERVER_HOST="$input"
@@ -208,7 +281,11 @@ choose_registration_server() {
   fi
 
   while true; do
-    printf 'Main server registration port [%s]: ' "$SERVER_PORT" >/dev/tty
+    if [ "$LANGUAGE" = "zh" ]; then
+      printf '主服务器注册端口 [%s]: ' "$SERVER_PORT" >/dev/tty
+    else
+      printf 'Main server registration port [%s]: ' "$SERVER_PORT" >/dev/tty
+    fi
     read -r port </dev/tty
     port="${port:-$SERVER_PORT}"
     if validate_port_value "$port"; then
@@ -216,14 +293,14 @@ choose_registration_server() {
       SERVER="http://$SERVER_HOST:$SERVER_PORT"
       break
     fi
-    printf '[WarpPool] invalid port, enter a number between 1 and 65535\n' >/dev/tty
+    printf '[WarpPool] %s\n' "$(text "invalid port, enter a number between 1 and 65535" "端口无效，请输入 1 到 65535 之间的数字")" >/dev/tty
   done
 
   if [ -z "$TOKEN" ]; then
-    printf 'Deploy Token for auto registration (Enter to skip auto registration): ' >/dev/tty
+    printf '%s' "$(text "Deploy Token for auto registration (Enter to skip auto registration): " "Deploy Token，用于自动注册（回车跳过自动注册）: ")" >/dev/tty
     read -r TOKEN </dev/tty
     if [ -z "$TOKEN" ]; then
-      log "no Deploy Token provided; this run will only install node dependencies"
+      log_i "no Deploy Token provided; this run will only install node dependencies" "未填写 Deploy Token；本次只安装节点依赖"
       SERVER=""
     fi
   fi
@@ -231,16 +308,16 @@ choose_registration_server() {
 
 validate_registration_args() {
   if [ -n "$SERVER" ] && [ -z "$TOKEN" ]; then
-    fail "server was provided but token is missing; run warppool deploy-token on the main server, or leave server IP empty for manual setup"
+    fail_i "server was provided but token is missing; run warppool deploy-token on the main server, or leave server IP empty for manual setup" "已填写主服务器但缺少 token；请在主服务器执行 warppool deploy-token，或留空主服务器地址改为手动配置"
   fi
   if [ -n "$TOKEN" ] && [ -z "$SERVER" ]; then
-    fail "server is required when token is provided"
+    fail_i "server is required when token is provided" "填写 token 时必须同时填写主服务器地址"
   fi
 }
 
 load_os_release() {
   if [ ! -r /etc/os-release ]; then
-    fail "/etc/os-release not found, unsupported Linux distribution"
+    fail_i "/etc/os-release not found, unsupported Linux distribution" "未找到 /etc/os-release，不支持当前 Linux 发行版"
   fi
 
   # shellcheck disable=SC1091
@@ -249,7 +326,7 @@ load_os_release() {
   OS_ID="${ID:-}"
   OS_VERSION="${VERSION_ID:-}"
   if [ -z "$OS_ID" ]; then
-    fail "cannot detect OS ID from /etc/os-release"
+    fail_i "cannot detect OS ID from /etc/os-release" "无法从 /etc/os-release 识别系统 ID"
   fi
 }
 
@@ -264,13 +341,13 @@ check_supported_os() {
   case "$OS_ID" in
     debian)
       if [ "$major" -lt 12 ]; then
-        fail "unsupported Debian version: $OS_VERSION, expected Debian 12+"
+        fail_i "unsupported Debian version: $OS_VERSION, expected Debian 12+" "不支持当前 Debian 版本：$OS_VERSION，需要 Debian 12+"
       fi
       CHILD_SCRIPT="install_debian.sh"
       ;;
     ubuntu)
       if [ "$major" -lt 20 ]; then
-        fail "unsupported Ubuntu version: $OS_VERSION, expected Ubuntu 20.04+"
+        fail_i "unsupported Ubuntu version: $OS_VERSION, expected Ubuntu 20.04+" "不支持当前 Ubuntu 版本：$OS_VERSION，需要 Ubuntu 20.04+"
       fi
       CHILD_SCRIPT="install_ubuntu.sh"
       ;;
@@ -279,12 +356,12 @@ check_supported_os() {
       minor="$(printf '%s' "$OS_VERSION" | cut -d. -f2)"
       minor="${minor:-0}"
       if [ "$major" -lt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -lt 20 ]; }; then
-        fail "unsupported Alpine version: $OS_VERSION, expected Alpine 3.20+"
+        fail_i "unsupported Alpine version: $OS_VERSION, expected Alpine 3.20+" "不支持当前 Alpine 版本：$OS_VERSION，需要 Alpine 3.20+"
       fi
       CHILD_SCRIPT="install_alpine.sh"
       ;;
     *)
-      fail "unsupported OS: $OS_ID $OS_VERSION"
+      fail_i "unsupported OS: $OS_ID $OS_VERSION" "不支持当前系统：$OS_ID $OS_VERSION"
       ;;
   esac
 }
@@ -295,29 +372,29 @@ check_arch() {
     x86_64|amd64|aarch64|arm64)
       ;;
     *)
-      fail "unsupported CPU architecture: $ARCH"
+      fail_i "unsupported CPU architecture: $ARCH" "不支持当前 CPU 架构：$ARCH"
       ;;
   esac
 }
 
 check_tun() {
   if [ ! -c /dev/net/tun ]; then
-    fail "TUN device is unavailable: /dev/net/tun not found or not a character device"
+    fail_i "TUN device is unavailable: /dev/net/tun not found or not a character device" "TUN 设备不可用：未找到 /dev/net/tun 或它不是字符设备"
   fi
 }
 
 check_ip_stack() {
   if command -v ip >/dev/null 2>&1; then
     if ! ip -4 addr show scope global | grep -q 'inet '; then
-      log "warning: no global IPv4 address detected"
+      log_i "warning: no global IPv4 address detected" "警告：未检测到全局 IPv4 地址"
     fi
     if ! ip -6 addr show scope global | grep -q 'inet6 '; then
-      log "warning: no global IPv6 address detected"
+      log_i "warning: no global IPv6 address detected" "警告：未检测到全局 IPv6 地址"
     fi
     return 0
   fi
 
-  log "warning: command 'ip' not found, IPv4/IPv6 check skipped"
+  log_i "warning: command 'ip' not found, IPv4/IPv6 check skipped" "警告：未找到 ip 命令，已跳过 IPv4/IPv6 检测"
 }
 
 check_existing_wireguard_state() {
@@ -331,8 +408,8 @@ check_existing_wireguard_state() {
     return 0
   fi
 
-  log "warning: existing WireGuard interfaces detected: $interfaces"
-  log "warning: WarpPool deploy will run a precise WireGuard preflight before writing its config"
+  log_i "warning: existing WireGuard interfaces detected: $interfaces" "警告：检测到已有 WireGuard 接口：$interfaces"
+  log_i "warning: WarpPool deploy will run a precise WireGuard preflight before writing its config" "警告：WarpPool 部署时会在写入配置前执行精确的 WireGuard 预检"
 }
 
 script_dir() {
@@ -352,11 +429,11 @@ download_script() {
   local target="$2"
 
   if ! command -v curl >/dev/null 2>&1; then
-    fail "curl is required to download installer script: $name"
+    fail_i "curl is required to download installer script: $name" "需要 curl 来下载安装脚本：$name"
   fi
 
-  log "downloading $name from $BASE_URL" >&2
-  curl -fsSL "$BASE_URL/$name" -o "$target" || fail "failed to download $name from $BASE_URL"
+  log_i "downloading $name from $BASE_URL" "正在从 $BASE_URL 下载 $name" >&2
+  curl -fsSL "$BASE_URL/$name" -o "$target" || fail_i "failed to download $name from $BASE_URL" "从 $BASE_URL 下载 $name 失败"
   chmod 0755 "$target"
 }
 
@@ -384,10 +461,10 @@ dispatch_child_script() {
   local child
   child="$(prepare_child_script)"
   if [ ! -r "$child" ]; then
-    fail "child installer not found: $child"
+    fail_i "child installer not found: $child" "未找到子安装脚本：$child"
   fi
 
-  log "dispatching to $CHILD_SCRIPT, mode=$MODE"
+  log_i "dispatching to $CHILD_SCRIPT, mode=$MODE" "切换到 $CHILD_SCRIPT，模式=$MODE"
   if [ "$DRY_RUN" = "true" ]; then
     bash "$child" --dry-run "mode=$MODE" "token=$TOKEN" "server=$SERVER" "endpoint=$ENDPOINT" "wg_listen_port=$WG_LISTEN_PORT" "wg_endpoint_port=$WG_ENDPOINT_PORT"
     return 0
@@ -398,6 +475,7 @@ dispatch_child_script() {
 
 main() {
   parse_args "$@"
+  select_language
   choose_mode
   choose_registration_server
   validate_mode
@@ -410,12 +488,12 @@ main() {
   check_ip_stack
   check_existing_wireguard_state
 
-  log "detected OS: $OS_ID $OS_VERSION"
-  log "detected arch: $ARCH"
-  log "selected mode: $MODE"
+  log_i "detected OS: $OS_ID $OS_VERSION" "检测到系统：$OS_ID $OS_VERSION"
+  log_i "detected arch: $ARCH" "检测到架构：$ARCH"
+  log_i "selected mode: $MODE" "已选择模式：$MODE"
 
   dispatch_child_script
-  log "installer completed"
+  log_i "installer completed" "安装脚本执行完成"
 }
 
 main "$@"
