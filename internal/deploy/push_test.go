@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/murongruolan/warp-pool/internal/config"
+	"github.com/murongruolan/warp-pool/internal/wireguard"
 )
 
 func TestPushDryRunAddsNode(t *testing.T) {
@@ -116,6 +117,30 @@ func TestRunWireGuardPreflightCommandUsesRemoteDir(t *testing.T) {
 		if !strings.Contains(command, want) {
 			t.Fatalf("preflight command missing %q:\n%s", want, command)
 		}
+	}
+}
+
+func TestWarpForwardCommandIncludesServerAddress(t *testing.T) {
+	command := warpForwardCommand(wireguardPlan(), "/tmp/custom dir", 14000)
+	for _, want := range []string{
+		"'/tmp/custom dir/warp_forward.sh'",
+		"'action=up'",
+		"'device=wpnat-warp'",
+		"'client_addr=10.200.0.2/30'",
+		"'server_addr=10.200.0.1/30'",
+		"'transparent_port=14000'",
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("warp forward command missing %q:\n%s", want, command)
+		}
+	}
+}
+
+func wireguardPlan() wireguard.Plan {
+	return wireguard.Plan{
+		Device:        "wpnat-warp",
+		ServerAddress: "10.200.0.1/30",
+		ClientAddress: "10.200.0.2/30",
 	}
 }
 

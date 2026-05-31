@@ -13,11 +13,13 @@ import (
 )
 
 type SSHOptions struct {
-	Host     string
-	Port     int
-	User     string
-	Password string
-	KeyPath  string
+	Host                  string
+	Port                  int
+	User                  string
+	Password              string
+	KeyPath               string
+	KnownHostsPath        string
+	InsecureIgnoreHostKey bool
 }
 
 type PushOptions struct {
@@ -111,7 +113,9 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 			Password: opts.SSH.Password,
 			KeyPath:  opts.SSH.KeyPath,
 		},
-		Timeout: 20 * time.Second,
+		Timeout:               20 * time.Second,
+		KnownHostsPath:        opts.SSH.KnownHostsPath,
+		InsecureIgnoreHostKey: opts.SSH.InsecureIgnoreHostKey,
 	})
 	if err != nil {
 		return cfg, result, err
@@ -165,17 +169,7 @@ func configureRemoteWarpForwarding(client *sshclient.Client, plan wireguard.Plan
 	if warpPort == 0 {
 		warpPort = 14000
 	}
-	scriptPath := filepath.ToSlash(filepath.Join(remoteDir, "warp_forward.sh"))
-	command := fmt.Sprintf(
-		"if [ -x %s ]; then bash %s %s %s %s %s %s; else echo '[WarpPool][warp-forward][ERROR] warp_forward.sh not found in deploy assets' >&2; exit 1; fi",
-		shellPath(scriptPath),
-		shellPath(scriptPath),
-		shellPath("action=up"),
-		shellPath("device="+plan.Device),
-		shellPath("client_addr="+plan.ClientAddress),
-		shellPath("server_addr="+plan.ServerAddress),
-		shellPath(fmt.Sprintf("transparent_port=%d", warpPort)),
-	)
+	command := warpForwardCommand(plan, remoteDir, warpPort)
 	remoteResult, err := client.Run(command)
 	if remoteResult.Stdout != "" {
 		result.Logs = append(result.Logs, remoteResult.Stdout)
@@ -188,6 +182,20 @@ func configureRemoteWarpForwarding(client *sshclient.Client, plan wireguard.Plan
 	}
 	result.Logs = append(result.Logs, "WARP forwarding enabled: "+plan.Device)
 	return nil
+}
+
+func warpForwardCommand(plan wireguard.Plan, remoteDir string, warpPort int) string {
+	scriptPath := filepath.ToSlash(filepath.Join(remoteDir, "warp_forward.sh"))
+	return fmt.Sprintf(
+		"if [ -x %s ]; then bash %s %s %s %s %s %s; else echo '[WarpPool][warp-forward][ERROR] warp_forward.sh not found in deploy assets' >&2; exit 1; fi",
+		shellPath(scriptPath),
+		shellPath(scriptPath),
+		shellPath("action=up"),
+		shellPath("device="+plan.Device),
+		shellPath("client_addr="+plan.ClientAddress),
+		shellPath("server_addr="+plan.ServerAddress),
+		shellPath(fmt.Sprintf("transparent_port=%d", warpPort)),
+	)
 }
 
 func uploadAssets(client *sshclient.Client, assetsDir string, remoteDir string, result *PushResult) error {

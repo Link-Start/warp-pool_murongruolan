@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"runtime"
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 type Auth struct {
@@ -16,11 +19,13 @@ type Auth struct {
 }
 
 type Config struct {
-	Host    string
-	Port    int
-	User    string
-	Auth    Auth
-	Timeout time.Duration
+	Host                  string
+	Port                  int
+	User                  string
+	Auth                  Auth
+	Timeout               time.Duration
+	KnownHostsPath        string
+	InsecureIgnoreHostKey bool
 }
 
 type Client struct {
@@ -50,11 +55,15 @@ func Dial(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	hostKeyCallback, err := hostKeyCallback(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	client, err := ssh.Dial("tcp", net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port)), &ssh.ClientConfig{
 		User:            cfg.User,
 		Auth:            auth,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCallback,
 		Timeout:         cfg.Timeout,
 	})
 	if err != nil {
@@ -124,6 +133,45 @@ func authMethods(auth Auth) ([]ssh.AuthMethod, error) {
 		return nil, fmt.Errorf("ssh password or key path is required")
 	}
 	return methods, nil
+}
+
+func hostKeyCallback(cfg Config) (ssh.HostKeyCallback, error) {
+	if cfg.InsecureIgnoreHostKey {
+		return ssh.InsecureIgnoreHostKey(), nil
+	}
+	path := cfg.KnownHostsPath
+	if path == "" {
+		path = DefaultKnownHostsPath()
+	}
+	if path == "" {
+		return nil, fmt.Errorf("known_hosts path is required; pass --known-hosts or --insecure-skip-host-key-check")
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("known_hosts file not found: %s; add the host key first or pass --insecure-skip-host-key-check", path)
+		}
+		return nil, fmt.Errorf("read known_hosts file: %w", err)
+	}
+	callback, err := knownhosts.New(path)
+	if err != nil {
+		return nil, fmt.Errorf("parse known_hosts file %s: %w", path, err)
+	}
+	return callback, nil
+}
+
+func DefaultKnownHostsPath() string {
+	if runtime.GOOS == "windows" {
+		profile := os.Getenv("USERPROFILE")
+		if profile == "" {
+			return ""
+		}
+		return filepath.Join(profile, ".ssh", "known_hosts")
+	}
+	home := os.Getenv("HOME")
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".ssh", "known_hosts")
 }
 
 func shellQuote(value string) string {

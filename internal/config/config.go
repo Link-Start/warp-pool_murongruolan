@@ -28,6 +28,8 @@ type Config struct {
 	Tokens   []DeployToken `json:"tokens"`
 }
 
+const DefaultDeployTokenTTL = 15 * time.Minute
+
 type ListenConfig struct {
 	Host       string `json:"host"`
 	PublicHost string `json:"public_host,omitempty"`
@@ -107,6 +109,10 @@ func Load(path string) (Config, error) {
 		path = DefaultPath()
 	}
 
+	if err := checkConfigPermissions(path); err != nil {
+		return Config{}, err
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, err
@@ -117,6 +123,20 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	return cfg, nil
+}
+
+func checkConfigPermissions(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("config file permissions are too open: %s has mode %04o, expected 0600 or stricter", path, info.Mode().Perm())
+	}
+	return nil
 }
 
 func Save(path string, cfg Config, force bool) error {

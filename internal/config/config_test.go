@@ -1,6 +1,9 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -220,5 +223,19 @@ func TestDeployTokenRejectsExpired(t *testing.T) {
 
 	if _, _, err := UseDeployToken(cfg, "token-1", time.Now().UTC()); err == nil {
 		t.Fatal("expected expired token error")
+	}
+}
+
+func TestLoadRejectsOpenPermissionsOnUnix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows permissions differ")
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected open permissions error")
 	}
 }

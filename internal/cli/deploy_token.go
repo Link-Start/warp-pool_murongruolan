@@ -84,7 +84,7 @@ func newDeployTokenCommand() *cobra.Command {
 	cmd.Flags().IntVar(&node.LocalPort, "port", 0, "local proxy port")
 	cmd.Flags().StringVar(&node.Country, "country", "", "node country or region")
 	cmd.Flags().StringVar(&node.PublicIP, "public-ip", "", "node public IP")
-	cmd.Flags().DurationVar(&ttl, "ttl", 30*time.Minute, "token TTL")
+	cmd.Flags().DurationVar(&ttl, "ttl", config.DefaultDeployTokenTTL, "token TTL")
 	cmd.Flags().StringVar(&publicHost, "public-host", "", "public host/IP for generated install command")
 	cmd.Flags().StringVar(&repoBaseURL, "repo-base-url", "", "installer assets base URL")
 

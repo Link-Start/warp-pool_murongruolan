@@ -42,7 +42,8 @@ func RegisterHandler(configPath string) http.Handler {
 
 		cfg, err := config.Load(configPath)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, RegisterResponse{OK: false, Message: fmt.Sprintf("load config: %v", err)})
+			writeJSON(w, http.StatusInternalServerError, RegisterResponse{OK: false, Message: "load config failed"})
+			fmt.Printf("[WarpPool][register][ERROR] load config: %v\n", err)
 			return
 		}
 
@@ -53,7 +54,8 @@ func RegisterHandler(configPath string) http.Handler {
 		}
 
 		if err := config.SaveExisting(configPath, cfg); err != nil {
-			writeJSON(w, http.StatusInternalServerError, RegisterResponse{OK: false, Message: fmt.Sprintf("save config: %v", err)})
+			writeJSON(w, http.StatusInternalServerError, RegisterResponse{OK: false, Message: "save config failed"})
+			fmt.Printf("[WarpPool][register][ERROR] save config: %v\n", err)
 			return
 		}
 

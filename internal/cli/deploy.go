@@ -8,6 +8,7 @@ import (
 	"github.com/murongruolan/warp-pool/internal/config"
 	"github.com/murongruolan/warp-pool/internal/deploy"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 func newDeployCommand() *cobra.Command {
@@ -25,6 +26,13 @@ func newDeployCommand() *cobra.Command {
 
 			if opts.SSH.Password == "" {
 				opts.SSH.Password = os.Getenv("WARPOOL_SSH_PASSWORD")
+			}
+			if opts.SSH.Password == "" && opts.SSH.KeyPath == "" {
+				password, err := promptPassword("SSH password: ")
+				if err != nil {
+					return err
+				}
+				opts.SSH.Password = password
 			}
 
 			next, result, err := deploy.Push(cfg, opts)
@@ -65,6 +73,8 @@ func newDeployCommand() *cobra.Command {
 	cmd.Flags().StringVar(&opts.SSH.User, "ssh-user", "root", "SSH user")
 	cmd.Flags().StringVar(&opts.SSH.Password, "ssh-password", "", "SSH password, or use WARPOOL_SSH_PASSWORD")
 	cmd.Flags().StringVar(&opts.SSH.KeyPath, "ssh-key", "", "SSH private key path")
+	cmd.Flags().StringVar(&opts.SSH.KnownHostsPath, "known-hosts", "", "known_hosts file path")
+	cmd.Flags().BoolVar(&opts.SSH.InsecureIgnoreHostKey, "insecure-skip-host-key-check", false, "skip SSH host key verification")
 	cmd.Flags().StringVar(&opts.RemoteDir, "remote-dir", "/tmp/warppool-install", "remote installer directory")
 	cmd.Flags().StringVar(&opts.AssetsDir, "assets-dir", "assets", "local assets directory")
 	cmd.Flags().StringVar(&opts.WGEndpoint, "wg-endpoint", "", "WireGuard endpoint host/IP, default SSH host")
@@ -78,4 +88,21 @@ func newDeployCommand() *cobra.Command {
 	_ = cmd.MarkFlagRequired("name")
 	_ = cmd.MarkFlagRequired("port")
 	return cmd
+}
+
+func promptPassword(prompt string) (string, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return "", fmt.Errorf("ssh password or key path is required; set WARPOOL_SSH_PASSWORD, pass --ssh-key, or run in an interactive terminal")
+	}
+	fmt.Fprint(os.Stderr, prompt)
+	data, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", fmt.Errorf("read ssh password: %w", err)
+	}
+	password := strings.TrimSpace(string(data))
+	if password == "" {
+		return "", fmt.Errorf("ssh password cannot be empty")
+	}
+	return password, nil
 }
