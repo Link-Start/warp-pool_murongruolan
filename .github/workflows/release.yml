@@ -1,0 +1,59 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Check tag matches VERSION
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          tag="${GITHUB_REF_NAME}"
+          if [ "$tag" != "v$version" ]; then
+            echo "tag $tag does not match VERSION v$version" >&2
+            exit 1
+          fi
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            work="dist/warppool-linux-${arch}"
+            mkdir -p "$work/assets"
+            GOOS=linux GOARCH="$arch" CGO_ENABLED=0 go build \
+              -ldflags "-s -w -X github.com/murongruolan/warp-pool/internal/cli.version=${GITHUB_REF_NAME} -X github.com/murongruolan/warp-pool/internal/cli.commit=${GITHUB_SHA} -X github.com/murongruolan/warp-pool/internal/cli.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              -o "$work/warppool" ./cmd/warppool
+            cp -R assets/. "$work/assets/"
+            tar -C dist -czf "dist/warppool-linux-${arch}.tar.gz" "warppool-linux-${arch}"
+          done
+          sha256sum dist/*.tar.gz > dist/checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/warppool-linux-amd64.tar.gz
+            dist/warppool-linux-arm64.tar.gz
+            dist/checksums.txt
