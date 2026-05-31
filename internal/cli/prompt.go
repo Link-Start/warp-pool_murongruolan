@@ -9,8 +9,9 @@ import (
 )
 
 type promptIO struct {
-	in  io.Reader
-	out io.Writer
+	in       io.Reader
+	out      io.Writer
+	language string
 }
 
 type menuOption struct {
@@ -19,7 +20,25 @@ type menuOption struct {
 }
 
 func newPromptIO(cmdOut io.Writer) promptIO {
-	return promptIO{in: inputReader, out: cmdOut}
+	return promptIO{in: inputReader, out: cmdOut, language: "en"}
+}
+
+func newPromptIOWithLanguage(cmdOut io.Writer, language string) promptIO {
+	if language != "zh" {
+		language = "en"
+	}
+	return promptIO{in: inputReader, out: cmdOut, language: language}
+}
+
+func (p promptIO) zh() bool {
+	return p.language == "zh"
+}
+
+func (p promptIO) msg(en string, zh string) string {
+	if p.zh() {
+		return zh
+	}
+	return en
 }
 
 func (p promptIO) askRequired(label string, current string) (string, error) {
@@ -37,7 +56,7 @@ func (p promptIO) askRequired(label string, current string) (string, error) {
 		if value != "" {
 			return value, nil
 		}
-		fmt.Fprintf(p.out, "%s is required\n", label)
+		fmt.Fprintf(p.out, "%s\n", p.msg(label+" is required", label+" 为必填项"))
 	}
 }
 
@@ -88,7 +107,7 @@ func (p promptIO) askInt(label string, current int, def int) (int, error) {
 		}
 		n, err := strconv.Atoi(value)
 		if err != nil {
-			fmt.Fprintln(p.out, "enter a number")
+			fmt.Fprintln(p.out, p.msg("enter a number", "请输入数字"))
 			continue
 		}
 		return n, nil
@@ -108,12 +127,12 @@ func (p promptIO) askRequiredInt(label string, current int) (int, error) {
 		}
 		value = strings.TrimSpace(value)
 		if value == "" {
-			fmt.Fprintf(p.out, "%s is required\n", label)
+			fmt.Fprintf(p.out, "%s\n", p.msg(label+" is required", label+" 为必填项"))
 			continue
 		}
 		n, err := strconv.Atoi(value)
 		if err != nil {
-			fmt.Fprintln(p.out, "enter a number")
+			fmt.Fprintln(p.out, p.msg("enter a number", "请输入数字"))
 			continue
 		}
 		return n, nil
@@ -145,7 +164,7 @@ func (p promptIO) askBool(label string, current bool, def bool) (bool, error) {
 		case "n", "no":
 			return false, nil
 		default:
-			fmt.Fprintln(p.out, "enter y or n")
+			fmt.Fprintln(p.out, p.msg("enter y or n", "请输入 y 或 n"))
 		}
 	}
 }
@@ -167,7 +186,7 @@ func (p promptIO) askMenu(label string, current string, def string, options []me
 		for i, option := range options {
 			fmt.Fprintf(p.out, "  %d. %s\n", i+1, option.Label)
 		}
-		fmt.Fprintf(p.out, "Select [%d]: ", defaultIndex)
+		fmt.Fprintf(p.out, "%s [%d]: ", p.msg("Select", "选择"), defaultIndex)
 		value, err := reader.ReadString('\n')
 		if err != nil {
 			return "", fmt.Errorf("read %s: %w", label, err)
@@ -178,7 +197,7 @@ func (p promptIO) askMenu(label string, current string, def string, options []me
 		}
 		n, err := strconv.Atoi(value)
 		if err != nil || n < 1 || n > len(options) {
-			fmt.Fprintln(p.out, "invalid selection")
+			fmt.Fprintln(p.out, p.msg("invalid selection", "无效选择"))
 			continue
 		}
 		return options[n-1].Value, nil

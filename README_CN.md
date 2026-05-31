@@ -4,8 +4,6 @@
 
 [English](README.md) | [简体中文](README_CN.md)
 
-> WarpPool 当前处于 MVP 阶段。如果主服务器可以 SSH 到出口节点，推荐使用 Push 部署；如果希望出口节点主动拉取配置，推荐使用 Deploy Token。
-
 ## 目录
 
 - [项目概述](#项目概述)
@@ -142,6 +140,8 @@ wget -qO- ···
 5. 安装 sing-box。
 6. 创建 systemd 服务。
 
+安装时选择的语言会写入 WarpPool 配置。后续 `warppool deploy`、`warppool deploy-token`、`warppool uninstall` 等交互命令会使用同一种语言。
+
 
 非交互安装
 
@@ -166,7 +166,7 @@ WireGuard 端口分两类：
 - `wg-listen-port`：出口节点本机 WireGuard 监听端口，默认 `51820`。
 - `wg-endpoint-port`：主服务器连接出口节点时使用的公网端口。NAT VPS 做端口转发时，这个端口通常和节点本机监听端口不同。
 
-默认开启 SSH HostKey 校验。临时测试时可以显式跳过：
+默认开启 SSH HostKey 校验。如果交互部署时默认 `known_hosts` 文件不存在，WarpPool 会询问本次部署是否跳过 SSH HostKey 校验。非交互部署或临时测试时可以显式传入：
 
 ```bash
 warppool deploy \
@@ -221,7 +221,7 @@ warppool deploy \
 curl --socks5 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace
 ```
 
-MVP 限制：当前 WARP 转发以 TCP 为主，暂不承诺 UDP / IPv6 完整支持。
+当前限制：WARP 转发以 TCP 为主，暂不承诺 UDP / IPv6 完整支持。
 
 ---
 

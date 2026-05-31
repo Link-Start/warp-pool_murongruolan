@@ -190,6 +190,73 @@ select_language() {
   done
 }
 
+check_existing_installation() {
+  local existing=0
+  local command_path=""
+  local uninstall_bin="warppool"
+
+  if command -v warppool >/dev/null 2>&1; then
+    command_path="$(command -v warppool)"
+    uninstall_bin="$command_path"
+    existing=1
+    log_i "existing warppool command found: $command_path" "检测到已存在 warppool 命令：$command_path"
+  fi
+  if [ -e "$INSTALL_DIR/warppool" ]; then
+    if [ -z "$command_path" ]; then
+      uninstall_bin="$INSTALL_DIR/warppool"
+    fi
+    existing=1
+    log_i "existing WarpPool binary found: $INSTALL_DIR/warppool" "检测到已存在 WarpPool 二进制：$INSTALL_DIR/warppool"
+  fi
+  if [ -e "$CONFIG_PATH" ]; then
+    existing=1
+    log_i "existing WarpPool config found: $CONFIG_PATH" "检测到已存在 WarpPool 配置：$CONFIG_PATH"
+  fi
+  if [ -d "$LIB_DIR" ]; then
+    existing=1
+    log_i "existing WarpPool installation directory found: $LIB_DIR" "检测到已存在 WarpPool 安装目录：$LIB_DIR"
+  fi
+
+  if [ "$existing" -eq 0 ]; then
+    return 0
+  fi
+
+  if [ "$LANGUAGE" = "zh" ]; then
+    cat >&2 <<EOF
+[WarpPool][server][ERROR] 检测到本机已经安装过 WarpPool。
+
+如需重新安装，请先执行卸载命令：
+  sudo $uninstall_bin uninstall --force
+
+如需同时清理本地 WireGuard 配置、代理/监听服务和运行状态：
+  sudo $uninstall_bin uninstall --force --clean-wg --clean-proxy
+
+如果卸载命令不存在，说明可能只剩配置或安装目录残留，请手动检查并清理：
+  $CONFIG_PATH
+  $LIB_DIR
+
+卸载完成后，再重新执行安装脚本。
+EOF
+  else
+    cat >&2 <<EOF
+[WarpPool][server][ERROR] WarpPool already appears to be installed on this machine.
+
+To reinstall, uninstall it first:
+  sudo $uninstall_bin uninstall --force
+
+To also remove local WireGuard configs, proxy/listener services, and runtime state:
+  sudo $uninstall_bin uninstall --force --clean-wg --clean-proxy
+
+If the uninstall command does not exist, only config or install directory remnants may remain. Check and remove manually:
+  $CONFIG_PATH
+  $LIB_DIR
+
+After uninstall completes, rerun this installer.
+EOF
+  fi
+  exit 1
+}
+
 load_os_release() {
   if [ ! -r /etc/os-release ]; then
     fail_i "/etc/os-release not found, unsupported Linux distribution" "未找到 /etc/os-release，不支持当前 Linux 发行版"
@@ -462,7 +529,7 @@ initialize_config() {
   fi
 
   if [ ! -f "$CONFIG_PATH" ]; then
-    "$bin" --config "$CONFIG_PATH" config init
+    "$bin" --config "$CONFIG_PATH" config init --language "$LANGUAGE"
   else
     log_i "config already exists, keeping: $CONFIG_PATH" "配置已存在，保留原配置：$CONFIG_PATH"
   fi
@@ -545,6 +612,7 @@ main() {
   select_language
   require_root
   require_linux
+  check_existing_installation
   load_os_release
   check_supported_os
   detect_arch

@@ -7,6 +7,7 @@ import (
 
 	"github.com/murongruolan/warp-pool/internal/config"
 	"github.com/murongruolan/warp-pool/internal/deploy"
+	"github.com/murongruolan/warp-pool/internal/sshclient"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -23,16 +24,32 @@ func newDeployCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			prompt := newPromptIO(cmd.OutOrStdout())
+			language := cfgLanguage(cfg)
+			prompt := newPromptIOWithLanguage(cmd.OutOrStdout(), language)
 			if err := promptDeployOptions(prompt, cfg, &opts); err != nil {
 				return err
+			}
+			if opts.SSH.KnownHostsPath == "" && !opts.SSH.InsecureIgnoreHostKey {
+				if _, err := os.Stat(defaultKnownHostsPath()); err != nil {
+					if os.IsNotExist(err) {
+						skip, askErr := prompt.askBool(
+							tr(language, "known_hosts file is missing. Skip SSH host key verification for this deploy?", "未找到 known_hosts 文件。本次部署是否跳过 SSH HostKey 校验？"),
+							false,
+							true,
+						)
+						if askErr != nil {
+							return askErr
+						}
+						opts.SSH.InsecureIgnoreHostKey = skip
+					}
+				}
 			}
 
 			if opts.SSH.Password == "" {
 				opts.SSH.Password = os.Getenv("WARPOOL_SSH_PASSWORD")
 			}
 			if opts.SSH.Password == "" && opts.SSH.KeyPath == "" {
-				password, err := promptPassword("SSH password: ")
+				password, err := promptPassword(tr(language, "SSH password: ", "SSH 密码: "))
 				if err != nil {
 					return err
 				}
@@ -95,18 +112,19 @@ func newDeployCommand() *cobra.Command {
 
 func promptDeployOptions(prompt promptIO, cfg config.Config, opts *deploy.PushOptions) error {
 	var err error
-	opts.Node.Name, err = prompt.askRequired("Node name", opts.Node.Name)
+	language := prompt.language
+	opts.Node.Name, err = prompt.askRequired(tr(language, "Node name", "节点名称"), opts.Node.Name)
 	if err != nil {
 		return err
 	}
-	opts.Node.ExitMode, err = prompt.askMenu("Exit mode", opts.Node.ExitMode, defaultString(cfg.Defaults.ExitMode, config.ExitModeDirect), []menuOption{
+	opts.Node.ExitMode, err = prompt.askMenu(tr(language, "Exit mode", "出口模式"), opts.Node.ExitMode, defaultString(cfg.Defaults.ExitMode, config.ExitModeDirect), []menuOption{
 		{Label: "direct", Value: config.ExitModeDirect},
 		{Label: "warp", Value: config.ExitModeWarp},
 	})
 	if err != nil {
 		return err
 	}
-	opts.Node.Proxy, err = prompt.askMenu("Local proxy protocol", opts.Node.Proxy, defaultString(cfg.Defaults.Proxy, config.ProxyMixed), []menuOption{
+	opts.Node.Proxy, err = prompt.askMenu(tr(language, "Local proxy protocol", "本地代理协议"), opts.Node.Proxy, defaultString(cfg.Defaults.Proxy, config.ProxyMixed), []menuOption{
 		{Label: "mixed", Value: config.ProxyMixed},
 		{Label: "socks5", Value: config.ProxySocks5},
 		{Label: "http", Value: config.ProxyHTTP},
@@ -122,30 +140,30 @@ func promptDeployOptions(prompt promptIO, cfg config.Config, opts *deploy.PushOp
 	if err != nil {
 		return err
 	}
-	opts.SSH.Host, err = prompt.askRequired("SSH host/IP", opts.SSH.Host)
+	opts.SSH.Host, err = prompt.askRequired(tr(language, "SSH host/IP", "SSH 主机/IP"), opts.SSH.Host)
 	if err != nil {
 		return err
 	}
-	opts.SSH.Port, err = prompt.askInt("SSH port", opts.SSH.Port, 22)
+	opts.SSH.Port, err = prompt.askInt(tr(language, "SSH port", "SSH 端口"), opts.SSH.Port, 22)
 	if err != nil {
 		return err
 	}
-	opts.SSH.User, err = prompt.askString("SSH user", opts.SSH.User, "root")
+	opts.SSH.User, err = prompt.askString(tr(language, "SSH user", "SSH 用户"), opts.SSH.User, "root")
 	if err != nil {
 		return err
 	}
-	opts.WGListenPort, err = prompt.askInt("WireGuard listen port", opts.WGListenPort, 51820)
+	opts.WGListenPort, err = prompt.askInt(tr(language, "WireGuard listen port", "WireGuard 监听端口"), opts.WGListenPort, 51820)
 	if err != nil {
 		return err
 	}
-	opts.WGEndpoint, err = prompt.askString("WireGuard public endpoint host/IP", opts.WGEndpoint, opts.SSH.Host)
+	opts.WGEndpoint, err = prompt.askString(tr(language, "WireGuard public endpoint host/IP", "WireGuard 公网端点主机/IP"), opts.WGEndpoint, opts.SSH.Host)
 	if err != nil {
 		return err
 	}
 	if opts.WGEndpoint == "" {
 		opts.WGEndpoint = opts.SSH.Host
 	}
-	opts.WGEndpointPort, err = prompt.askInt("WireGuard public endpoint port", opts.WGEndpointPort, opts.WGListenPort)
+	opts.WGEndpointPort, err = prompt.askInt(tr(language, "WireGuard public endpoint port", "WireGuard 公网端点端口"), opts.WGEndpointPort, opts.WGListenPort)
 	return err
 }
 
@@ -158,7 +176,7 @@ func defaultString(value string, fallback string) string {
 
 func promptAvailableLocalPort(prompt promptIO, cfg config.Config, bindHost string, current int) (int, error) {
 	for {
-		port, err := prompt.askRequiredInt("Local proxy port", current)
+		port, err := prompt.askRequiredInt(tr(prompt.language, "Local proxy port", "本地代理端口"), current)
 		if err != nil {
 			return 0, err
 		}
@@ -200,4 +218,8 @@ func promptPassword(prompt string) (string, error) {
 		return "", fmt.Errorf("ssh password cannot be empty")
 	}
 	return password, nil
+}
+
+func defaultKnownHostsPath() string {
+	return sshclient.DefaultKnownHostsPath()
 }

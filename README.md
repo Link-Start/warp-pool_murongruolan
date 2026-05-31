@@ -4,8 +4,6 @@ WireGuard-based multi-exit proxy management for small VPS and NAT VPS nodes.
 
 [English](README.md) | [简体中文](README_CN.md)
 
-> WarpPool is an MVP-stage CLI project. Push deployment is recommended when the main server can SSH into the exit node. Deploy Token is recommended when the exit node should pull its configuration from the main server.
-
 ## Table of Contents
 
 - [Overview](#overview)
@@ -149,6 +147,8 @@ The installer will:
 5. Install sing-box.
 6. Create systemd services.
 
+The selected language is saved to the WarpPool config. Later interactive commands such as `warppool deploy`, `warppool deploy-token`, and `warppool uninstall` use the same language.
+
 Non-interactive installation:
 
 ```bash
@@ -182,7 +182,7 @@ WireGuard ports are split into two values:
 
 Push mode asks for the SSH port, the node-side WireGuard listen port, and the public WireGuard mapped port. NAT nodes commonly use non-standard SSH and UDP mapped ports, so enter the real forwarded ports from your provider.
 
-By default, SSH host key verification is enabled. For temporary tests only:
+By default, SSH host key verification is enabled. If the default `known_hosts` file does not exist during interactive deployment, WarpPool asks whether to skip SSH HostKey verification for this deployment. For non-interactive deployment or temporary tests, pass:
 
 ```bash
 warppool deploy \
@@ -251,7 +251,7 @@ from:
 curl --socks5 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace
 ```
 
-MVP limitation: WARP forwarding is TCP-first. UDP and IPv6 are not promised as complete yet.
+Current limitation: WARP forwarding is TCP-first. UDP and IPv6 are not promised as complete yet.
 
 ---
 
@@ -366,7 +366,7 @@ warppool ping nat01 # Test WireGuard connectivity to nat01
 warppool speedtest --proxy http://127.0.0.1:10133 # Run a simple speed test through a proxy
 ```
 
-MVP note: `speedtest` is safest with HTTP proxy URLs. Full SOCKS proxy handling is planned before stable release.
+Note: `speedtest` is safest with HTTP proxy URLs. Full SOCKS proxy handling is planned.
 
 ### Uninstall
 
@@ -459,4 +459,4 @@ The script checks the working tree, updates `VERSION`, creates a Chinese commit,
 - No database.
 - No multi-user permission model.
 - No remote Agent.
-- `upgrade` is a safe placeholder command in MVP.
+- `upgrade` is currently a safe placeholder command.

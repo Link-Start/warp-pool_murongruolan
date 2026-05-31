@@ -45,6 +45,18 @@ func TestValidateProxy(t *testing.T) {
 	}
 }
 
+func TestValidateLanguage(t *testing.T) {
+	if err := ValidateLanguage("zh-CN"); err != nil {
+		t.Fatalf("expected zh-CN language alias to be valid: %v", err)
+	}
+	if got := NormalizeLanguage("zh-CN"); got != "zh" {
+		t.Fatalf("unexpected normalized language: %s", got)
+	}
+	if err := ValidateLanguage("fr"); err == nil {
+		t.Fatal("expected invalid language")
+	}
+}
+
 func TestValidateExitMode(t *testing.T) {
 	for _, mode := range []string{ExitModeDirect, ExitModeWarp} {
 		if err := ValidateExitMode(mode); err != nil {
