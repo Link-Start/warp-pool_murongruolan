@@ -131,11 +131,18 @@ func Start(data []byte, opts ManagerOptions) (StartResult, error) {
 }
 
 func CheckInboundPorts(data []byte) error {
+	return CheckInboundPortsExcept(data, nil)
+}
+
+func CheckInboundPortsExcept(data []byte, ignored map[string]bool) error {
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return fmt.Errorf("parse sing-box config for port check: %w", err)
 	}
 	for _, inbound := range cfg.Inbounds {
+		if ignored != nil && ignored[inbound.Tag] {
+			continue
+		}
 		ln, err := net.Listen("tcp", net.JoinHostPort(inbound.Listen, strconv.Itoa(inbound.ListenPort)))
 		if err != nil {
 			return fmt.Errorf("local proxy port is not available for inbound %s: %s:%d: %w", inbound.Tag, inbound.Listen, inbound.ListenPort, err)

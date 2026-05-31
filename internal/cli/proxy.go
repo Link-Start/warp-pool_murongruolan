@@ -11,6 +11,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type proxyConfigMode int
+
+const (
+	proxyConfigStrict proxyConfigMode = iota
+	proxyConfigRestart
+)
+
 func newProxyCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "proxy",
@@ -27,13 +34,21 @@ func newProxyCommand() *cobra.Command {
 }
 
 func buildAndValidateProxyConfig(cfg config.Config, opts singbox.Options) ([]byte, error) {
+	return buildProxyConfig(cfg, opts, proxyConfigStrict, nil)
+}
+
+func buildProxyConfig(cfg config.Config, opts singbox.Options, mode proxyConfigMode, restartingNode *config.Node) ([]byte, error) {
 	data, err := singbox.BuildJSON(cfg, opts)
 	if err != nil {
 		return nil, err
 	}
-	if err := singbox.CheckInboundPorts(data); err != nil {
+	ignored := map[string]bool(nil)
+	if mode == proxyConfigRestart && restartingNode != nil {
+		ignored = map[string]bool{singbox.InboundTag(restartingNode.Name): true}
+	}
+	if err := singbox.CheckInboundPortsExcept(data, ignored); err != nil {
 		status, statusErr := singbox.Status(singbox.ManagerOptions{})
-		if statusErr == nil && status.Running {
+		if mode == proxyConfigStrict && statusErr == nil && status.Running {
 			return data, nil
 		}
 		return nil, err
@@ -237,22 +252,20 @@ func ensureProxyServiceInstalled(configPath string) error {
 	return runSystemctl("daemon-reload")
 }
 
-func startProxyService(configPath string) error {
+func startProxyService(configPath string, restartingNode *config.Node) error {
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("systemd service is only supported on Linux")
 	}
-	if !fileExistsLocal(singbox.DefaultConfigPath()) {
-		cfg, err := config.Load(configPath)
-		if err != nil {
-			return fmt.Errorf("load config: %w", err)
-		}
-		data, err := buildAndValidateProxyConfig(cfg, singbox.Options{})
-		if err != nil {
-			return err
-		}
-		if err := singbox.WriteConfig(singbox.DefaultConfigPath(), data); err != nil {
-			return fmt.Errorf("write sing-box config: %w", err)
-		}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	data, err := buildProxyConfig(cfg, singbox.Options{}, proxyConfigRestart, restartingNode)
+	if err != nil {
+		return err
+	}
+	if err := singbox.WriteConfig(singbox.DefaultConfigPath(), data); err != nil {
+		return fmt.Errorf("write sing-box config: %w", err)
 	}
 	if err := ensureProxyServiceInstalled(configPath); err != nil {
 		return err
@@ -275,7 +288,7 @@ func newProxyServiceEnableCommand() *cobra.Command {
 		Use:   "enable",
 		Short: "Enable local proxy on boot",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := startProxyService(resolvedConfigPath()); err != nil {
+			if err := startProxyService(resolvedConfigPath(), nil); err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "enabled service: warppool-proxy.service")

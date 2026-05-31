@@ -32,6 +32,36 @@ func TestPrintNodeDetailsChinese(t *testing.T) {
 	}
 }
 
+func TestPrintNodeDetailsEmbeddedWireGuardDoesNotCallSystemWG(t *testing.T) {
+	var out bytes.Buffer
+	node := config.Node{
+		Name:               "US1",
+		ExitMode:           config.ExitModeDirect,
+		Proxy:              config.ProxyMixed,
+		BindHost:           "127.0.0.1",
+		LocalPort:          10016,
+		WGDevice:           "wpus1",
+		WGServerAddress:    "10.200.0.1/30",
+		WGClientAddress:    "10.200.0.2/30",
+		WGClientPrivateKey: "client-private-key",
+		WGServerPublicKey:  "server-public-key",
+		Endpoint:           "204.197.163.238:41704",
+	}
+
+	if err := printNodeDetails(&out, "zh", node, true); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{"本地 WireGuard endpoint:", "sing-box 内置 endpoint", "由 sing-box 管理"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "WireGuard 错误") || strings.Contains(text, "wg show") {
+		t.Fatalf("embedded WireGuard status should not call system wg:\n%s", text)
+	}
+}
+
 func TestSafeFilePart(t *testing.T) {
 	if got := safeFilePart("美国NAT01"); got != "nat01" {
 		t.Fatalf("unexpected safe file part: %s", got)

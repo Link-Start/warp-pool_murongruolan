@@ -54,12 +54,17 @@ func newDoctorCommand() *cobra.Command {
 }
 
 func newPingCommand() *cobra.Command {
+	return newPingCommandWithHTTPCheck(fetchText)
+}
+
+func newPingCommandWithHTTPCheck(httpCheck func(string, string, time.Duration) (string, error)) *cobra.Command {
 	var count int
 	var timeout time.Duration
+	var checkURL string
 
 	cmd := &cobra.Command{
 		Use:   "ping [node]",
-		Short: "Ping WireGuard peer addresses",
+		Short: "Check node connectivity",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load(resolvedConfigPath())
@@ -79,19 +84,36 @@ func newPingCommand() *cobra.Command {
 			}
 
 			for _, node := range nodes {
-				target := hostOnly(node.WGServerAddress)
-				if target == "" {
-					fmt.Fprintf(cmd.OutOrStdout(), "%s: missing wg_server_address\n", node.Name)
+				fmt.Fprintf(cmd.OutOrStdout(), "== %s ==\n", node.Name)
+				if nodeUsesSystemWireGuard(node) {
+					target := hostOnly(node.WGServerAddress)
+					if target == "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "%s: missing wg_server_address\n", node.Name)
+						continue
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "mode: system wireguard ping (%s)\n", target)
+					out, err := runPing(target, count, timeout)
+					if strings.TrimSpace(out) != "" {
+						fmt.Fprintln(cmd.OutOrStdout(), strings.TrimSpace(out))
+					}
+					if err != nil {
+						fmt.Fprintf(cmd.OutOrStdout(), "ping failed: %v\n", err)
+					}
 					continue
 				}
-				out, err := runPing(target, count, timeout)
-				fmt.Fprintf(cmd.OutOrStdout(), "== %s (%s) ==\n", node.Name, target)
-				if strings.TrimSpace(out) != "" {
-					fmt.Fprintln(cmd.OutOrStdout(), strings.TrimSpace(out))
+
+				proxyURL := nodeProxyURL(node)
+				if proxyURL == "" {
+					fmt.Fprintln(cmd.OutOrStdout(), "proxy check skipped: missing local proxy address")
+					continue
 				}
+				fmt.Fprintf(cmd.OutOrStdout(), "mode: sing-box embedded wireguard proxy check (%s)\n", proxyURL)
+				body, err := httpCheck(checkURL, proxyURL, timeout)
 				if err != nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "ping failed: %v\n", err)
+					fmt.Fprintf(cmd.OutOrStdout(), "proxy check failed: %v\n", err)
+					continue
 				}
+				fmt.Fprintf(cmd.OutOrStdout(), "proxy check ok: %s\n", strings.TrimSpace(body))
 			}
 			return nil
 		},
@@ -99,6 +121,7 @@ func newPingCommand() *cobra.Command {
 
 	cmd.Flags().IntVarP(&count, "count", "c", 3, "ping count")
 	cmd.Flags().DurationVar(&timeout, "timeout", 2*time.Second, "per-packet timeout")
+	cmd.Flags().StringVar(&checkURL, "url", "https://api.ipify.org", "HTTP URL used for sing-box proxy connectivity check")
 	return cmd
 }
 
@@ -308,6 +331,46 @@ func runPing(target string, count int, timeout time.Duration) (string, error) {
 	}
 	out, err := exec.Command("ping", "-c", fmt.Sprintf("%d", count), "-W", fmt.Sprintf("%d", seconds), target).CombinedOutput()
 	return string(out), err
+}
+
+func nodeProxyURL(node config.Node) string {
+	if strings.TrimSpace(node.BindHost) == "" || node.LocalPort == 0 {
+		return ""
+	}
+	host := node.BindHost
+	if host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	scheme := "socks5"
+	if node.Proxy == config.ProxyHTTP {
+		scheme = "http"
+	}
+	return fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(host, fmt.Sprintf("%d", node.LocalPort)))
+}
+
+func fetchText(rawURL string, proxyURL string, timeout time.Duration) (string, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if proxyURL != "" {
+		parsedProxy, err := url.Parse(proxyURL)
+		if err != nil {
+			return "", fmt.Errorf("parse proxy URL: %w", err)
+		}
+		transport.Proxy = http.ProxyURL(parsedProxy)
+	}
+	client := &http.Client{Transport: transport, Timeout: timeout}
+	resp, err := client.Get(rawURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("HTTP status: %s", resp.Status)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 func timedDownload(rawURL string, proxyURL string, timeout time.Duration) (int64, error) {
