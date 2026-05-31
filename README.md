@@ -142,11 +142,12 @@ curl -fsSL https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/
 
 The installer will:
 
-1. Detect OS and CPU architecture.
-2. Install base dependencies.
-3. Download and install the matching WarpPool release package.
-4. Install sing-box.
-5. Create systemd services.
+1. Ask for the interactive language: Simplified Chinese or English.
+2. Detect OS and CPU architecture.
+3. Install base dependencies.
+4. Download and install the matching WarpPool release package.
+5. Install sing-box.
+6. Create systemd services.
 
 Non-interactive installation:
 

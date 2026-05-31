@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO="${WARPOOL_REPO:-murongruolan/warp-pool}"
-VERSION="${WARPOOL_VERSION:-latest}"
-INSTALL_DIR="${WARPOOL_INSTALL_DIR:-/usr/local/bin}"
-LIB_DIR="${WARPOOL_LIB_DIR:-/usr/local/lib/warppool}"
-CONFIG_PATH="${WARPOOL_CONFIG_PATH:-/etc/warppool/config.json}"
-LISTEN_HOST="${WARPOOL_LISTEN_HOST:-0.0.0.0}"
-DEFAULT_LISTEN_PORT="${WARPOOL_LISTEN_PORT:-8080}"
-LISTEN_PORT="${WARPOOL_LISTEN_PORT_VALUE:-}"
-PUBLIC_HOST="${WARPOOL_PUBLIC_HOST:-}"
+REPO="${WARPPOOL_REPO:-${WARPOOL_REPO:-murongruolan/warp-pool}}"
+RELEASE_VERSION="${WARPPOOL_VERSION:-${WARPOOL_VERSION:-latest}}"
+INSTALL_DIR="${WARPPOOL_INSTALL_DIR:-${WARPOOL_INSTALL_DIR:-/usr/local/bin}}"
+LIB_DIR="${WARPPOOL_LIB_DIR:-${WARPOOL_LIB_DIR:-/usr/local/lib/warppool}}"
+CONFIG_PATH="${WARPPOOL_CONFIG_PATH:-${WARPOOL_CONFIG_PATH:-/etc/warppool/config.json}}"
+LISTEN_HOST="${WARPPOOL_LISTEN_HOST:-${WARPOOL_LISTEN_HOST:-0.0.0.0}}"
+DEFAULT_LISTEN_PORT="${WARPPOOL_LISTEN_PORT:-${WARPOOL_LISTEN_PORT:-8080}}"
+LISTEN_PORT="${WARPPOOL_LISTEN_PORT_VALUE:-${WARPOOL_LISTEN_PORT_VALUE:-}}"
+PUBLIC_HOST="${WARPPOOL_PUBLIC_HOST:-${WARPOOL_PUBLIC_HOST:-}}"
+LANGUAGE="${WARPPOOL_LANG:-${WARPOOL_LANG:-}}"
 YES="false"
 DRY_RUN="false"
 WORK_DIR=""
@@ -21,6 +22,22 @@ log() {
 fail() {
   printf '[WarpPool][server][ERROR] %s\n' "$*" >&2
   exit 1
+}
+
+text() {
+  if [ "${LANGUAGE:-en}" = "zh" ]; then
+    printf '%s' "$2"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+log_i() {
+  log "$(text "$1" "$2")"
+}
+
+fail_i() {
+  fail "$(text "$1" "$2")"
 }
 
 on_error() {
@@ -54,6 +71,7 @@ Options:
   public_host=1.2.3.4
   install_dir=/usr/local/bin
   config=/etc/warppool/config.json
+  lang=zh|en
   --yes
   --dry-run
 USAGE
@@ -73,7 +91,7 @@ parse_args() {
         DRY_RUN="true"
         ;;
       version=*)
-        VERSION="${arg#version=}"
+        RELEASE_VERSION="${arg#version=}"
         ;;
       repo=*)
         REPO="${arg#repo=}"
@@ -90,8 +108,11 @@ parse_args() {
       config=*)
         CONFIG_PATH="${arg#config=}"
         ;;
+      lang=*|language=*)
+        LANGUAGE="${arg#*=}"
+        ;;
       *)
-        fail "unknown argument: $arg"
+        fail_i "unknown argument: $arg" "未知参数：$arg"
         ;;
     esac
   done
@@ -99,7 +120,7 @@ parse_args() {
 
 run() {
   if [ "$DRY_RUN" = "true" ]; then
-    log "dry-run: $*"
+    log_i "dry-run: $*" "dry-run：$*"
     return 0
   fi
   "$@"
@@ -107,19 +128,71 @@ run() {
 
 require_root() {
   if [ "$(id -u)" -ne 0 ]; then
-    fail "installer must run as root; use: wget -qO- <url> | sudo bash"
+    fail_i "installer must run as root; use: wget -qO- <url> | sudo bash" "安装脚本必须以 root 权限运行；用法：wget -qO- <url> | sudo bash"
   fi
 }
 
 require_linux() {
   if [ "$(uname -s | tr '[:upper:]' '[:lower:]')" != "linux" ]; then
-    fail "main server installer only supports Linux"
+    fail_i "main server installer only supports Linux" "主服务器安装脚本仅支持 Linux"
   fi
+}
+
+normalize_language() {
+  case "$1" in
+    zh|zh_CN|zh-CN|cn|CN|1)
+      printf 'zh\n'
+      ;;
+    en|en_US|en-US|english|English|2)
+      printf 'en\n'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+select_language() {
+  local choice normalized
+  if [ -n "$LANGUAGE" ]; then
+    normalized="$(normalize_language "$LANGUAGE")" || fail "invalid language: $LANGUAGE, expected zh or en / 语言无效：$LANGUAGE，应为 zh 或 en"
+    LANGUAGE="$normalized"
+    return 0
+  fi
+  if [ "$YES" = "true" ]; then
+    LANGUAGE="en"
+    return 0
+  fi
+  if ! is_interactive; then
+    LANGUAGE="en"
+    return 0
+  fi
+
+  while true; do
+    printf '请选择语言 / Please select language:\n' >/dev/tty
+    printf '  1. 简体中文\n' >/dev/tty
+    printf '  2. English\n' >/dev/tty
+    printf '选择 / Select [1]: ' >/dev/tty
+    read -r choice </dev/tty
+    case "$choice" in
+      ""|1)
+        LANGUAGE="zh"
+        return 0
+        ;;
+      2)
+        LANGUAGE="en"
+        return 0
+        ;;
+      *)
+        printf '无效选择 / Invalid selection\n' >/dev/tty
+        ;;
+    esac
+  done
 }
 
 load_os_release() {
   if [ ! -r /etc/os-release ]; then
-    fail "/etc/os-release not found, unsupported Linux distribution"
+    fail_i "/etc/os-release not found, unsupported Linux distribution" "未找到 /etc/os-release，不支持当前 Linux 发行版"
   fi
 
   # shellcheck disable=SC1091
@@ -127,7 +200,7 @@ load_os_release() {
   OS_ID="${ID:-}"
   OS_VERSION="${VERSION_ID:-}"
   if [ -z "$OS_ID" ]; then
-    fail "cannot detect OS ID from /etc/os-release"
+    fail_i "cannot detect OS ID from /etc/os-release" "无法从 /etc/os-release 识别系统 ID"
   fi
 }
 
@@ -141,23 +214,23 @@ check_supported_os() {
   case "$OS_ID" in
     debian)
       if [ "$major" -lt 12 ]; then
-        fail "unsupported Debian version: $OS_VERSION, expected Debian 12+"
+        fail_i "unsupported Debian version: $OS_VERSION, expected Debian 12+" "不支持当前 Debian 版本：$OS_VERSION，需要 Debian 12+"
       fi
       ;;
     ubuntu)
       if [ "$major" -lt 20 ]; then
-        fail "unsupported Ubuntu version: $OS_VERSION, expected Ubuntu 20.04+"
+        fail_i "unsupported Ubuntu version: $OS_VERSION, expected Ubuntu 20.04+" "不支持当前 Ubuntu 版本：$OS_VERSION，需要 Ubuntu 20.04+"
       fi
       ;;
     alpine)
       minor="$(printf '%s' "$OS_VERSION" | cut -d. -f2)"
       minor="${minor:-0}"
       if [ "$major" -lt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -lt 20 ]; }; then
-        fail "unsupported Alpine version: $OS_VERSION, expected Alpine 3.20+"
+        fail_i "unsupported Alpine version: $OS_VERSION, expected Alpine 3.20+" "不支持当前 Alpine 版本：$OS_VERSION，需要 Alpine 3.20+"
       fi
       ;;
     *)
-      fail "unsupported OS: $OS_ID $OS_VERSION"
+      fail_i "unsupported OS: $OS_ID $OS_VERSION" "不支持当前系统：$OS_ID $OS_VERSION"
       ;;
   esac
 }
@@ -173,13 +246,13 @@ detect_arch() {
       ARCH="arm64"
       ;;
     *)
-      fail "unsupported CPU architecture: $raw, expected amd64 or arm64"
+      fail_i "unsupported CPU architecture: $raw, expected amd64 or arm64" "不支持当前 CPU 架构：$raw，需要 amd64 或 arm64"
       ;;
   esac
 }
 
 install_base_packages() {
-  log "installing base packages"
+  log_i "installing base packages" "正在安装基础软件包"
   case "$OS_ID" in
     debian|ubuntu)
       run env DEBIAN_FRONTEND=noninteractive apt-get update
@@ -245,7 +318,7 @@ port_available() {
     return $?
   fi
 
-  log "warning: cannot verify port availability because python, ss, and netstat are unavailable"
+  log_i "warning: cannot verify port availability because python, ss, and netstat are unavailable" "警告：无法检测端口占用，因为 python、ss、netstat 都不可用"
   return 0
 }
 
@@ -258,10 +331,10 @@ choose_listen_port() {
 
   if [ -n "$LISTEN_PORT" ]; then
     if ! validate_port_value "$LISTEN_PORT"; then
-      fail "invalid listener port: $LISTEN_PORT"
+      fail_i "invalid listener port: $LISTEN_PORT" "监听端口无效：$LISTEN_PORT"
     fi
     if ! port_available "$LISTEN_HOST" "$LISTEN_PORT"; then
-      fail "listener port is already in use: $LISTEN_HOST:$LISTEN_PORT"
+      fail_i "listener port is already in use: $LISTEN_HOST:$LISTEN_PORT" "监听端口已被占用：$LISTEN_HOST:$LISTEN_PORT"
     fi
     return 0
   fi
@@ -269,22 +342,26 @@ choose_listen_port() {
   if ! is_interactive; then
     LISTEN_PORT="$DEFAULT_LISTEN_PORT"
     if ! port_available "$LISTEN_HOST" "$LISTEN_PORT"; then
-      fail "default listener port is already in use: $LISTEN_HOST:$LISTEN_PORT; rerun with port=<port>"
+      fail_i "default listener port is already in use: $LISTEN_HOST:$LISTEN_PORT; rerun with port=<port>" "默认监听端口已被占用：$LISTEN_HOST:$LISTEN_PORT；请用 port=<端口> 重新执行"
     fi
     return 0
   fi
 
   while true; do
-    printf 'WarpPool registration listener port [%s]: ' "$DEFAULT_LISTEN_PORT" >/dev/tty
+    if [ "$LANGUAGE" = "zh" ]; then
+      printf 'WarpPool 注册监听端口 [%s]: ' "$DEFAULT_LISTEN_PORT" >/dev/tty
+    else
+      printf 'WarpPool registration listener port [%s]: ' "$DEFAULT_LISTEN_PORT" >/dev/tty
+    fi
     read -r input </dev/tty
     candidate="${input:-$DEFAULT_LISTEN_PORT}"
 
     if ! validate_port_value "$candidate"; then
-      printf '[WarpPool][server] invalid port, enter a number between 1 and 65535\n' >/dev/tty
+      printf '[WarpPool][server] %s\n' "$(text "invalid port, enter a number between 1 and 65535" "端口无效，请输入 1 到 65535 之间的数字")" >/dev/tty
       continue
     fi
     if ! port_available "$LISTEN_HOST" "$candidate"; then
-      printf '[WarpPool][server] port %s is already in use, choose another one\n' "$candidate" >/dev/tty
+      printf '[WarpPool][server] %s\n' "$(text "port $candidate is already in use, choose another one" "端口 $candidate 已被占用，请换一个端口")" >/dev/tty
       continue
     fi
 
@@ -304,17 +381,17 @@ fetch() {
     wget -O "$target" "$url"
     return $?
   fi
-  fail "curl or wget is required to download $url"
+  fail_i "curl or wget is required to download $url" "需要 curl 或 wget 来下载 $url"
 }
 
 release_url() {
   local asset="warppool-linux-${ARCH}.tar.gz"
-  if [ "$VERSION" = "latest" ]; then
+  if [ "$RELEASE_VERSION" = "latest" ]; then
     printf 'https://github.com/%s/releases/latest/download/%s\n' "$REPO" "$asset"
     return 0
   fi
 
-  local tag="$VERSION"
+  local tag="$RELEASE_VERSION"
   case "$tag" in
     v*) ;;
     *) tag="v$tag" ;;
@@ -327,44 +404,44 @@ download_and_install_warppool() {
   url="$(release_url)"
 
   if [ "$DRY_RUN" = "true" ]; then
-    log "dry-run: download WarpPool release from $url"
-    log "dry-run: install binary to $INSTALL_DIR/warppool"
-    log "dry-run: install assets to $LIB_DIR/assets"
+    log_i "dry-run: download WarpPool release from $url" "dry-run：从 $url 下载 WarpPool 发布包"
+    log_i "dry-run: install binary to $INSTALL_DIR/warppool" "dry-run：安装二进制到 $INSTALL_DIR/warppool"
+    log_i "dry-run: install assets to $LIB_DIR/assets" "dry-run：安装资源文件到 $LIB_DIR/assets"
     return 0
   fi
 
   WORK_DIR="$(mktemp -d)"
   archive="$WORK_DIR/warppool.tar.gz"
-  log "downloading WarpPool release: $url"
-  fetch "$url" "$archive" || fail "failed to download WarpPool release package; publish a release first or pass version=vX.Y.Z"
+  log_i "downloading WarpPool release: $url" "正在下载 WarpPool 发布包：$url"
+  fetch "$url" "$archive" || fail_i "failed to download WarpPool release package; publish a release first or pass version=vX.Y.Z" "下载 WarpPool 发布包失败；请先发布 Release，或传入 version=vX.Y.Z"
 
-  tar -xzf "$archive" -C "$WORK_DIR" || fail "failed to extract WarpPool release package"
+  tar -xzf "$archive" -C "$WORK_DIR" || fail_i "failed to extract WarpPool release package" "解压 WarpPool 发布包失败"
   binary="$(find "$WORK_DIR" -type f -name warppool | head -n 1 || true)"
   if [ -z "$binary" ]; then
-    fail "warppool binary not found in release package"
+    fail_i "warppool binary not found in release package" "发布包中未找到 warppool 二进制文件"
   fi
 
   mkdir -p "$INSTALL_DIR" "$LIB_DIR/assets"
-  cp "$binary" "$INSTALL_DIR/warppool" || fail "failed to install warppool binary"
+  cp "$binary" "$INSTALL_DIR/warppool" || fail_i "failed to install warppool binary" "安装 warppool 二进制失败"
   chmod 0755 "$INSTALL_DIR/warppool"
 
   assets_dir="$(find "$WORK_DIR" -type d -name assets | head -n 1 || true)"
   if [ -n "$assets_dir" ]; then
     cp -R "$assets_dir/." "$LIB_DIR/assets/"
   else
-    log "warning: assets directory not found in release package"
+    log_i "warning: assets directory not found in release package" "警告：发布包中未找到 assets 目录"
   fi
 }
 
 install_singbox() {
   local script="$LIB_DIR/assets/singbox_install.sh"
   if [ "$DRY_RUN" = "true" ]; then
-    log "dry-run: install sing-box through $script"
+    log_i "dry-run: install sing-box through $script" "dry-run：通过 $script 安装 sing-box"
     return 0
   fi
   if [ ! -r "$script" ]; then
-    log "warning: sing-box installer not found: $script"
-    log "warning: install sing-box manually before running warppool proxy start"
+    log_i "warning: sing-box installer not found: $script" "警告：未找到 sing-box 安装脚本：$script"
+    log_i "warning: install sing-box manually before running warppool proxy start" "警告：请在执行 warppool proxy start 前手动安装 sing-box"
     return 0
   fi
 
@@ -375,19 +452,19 @@ initialize_config() {
   local bin="$INSTALL_DIR/warppool"
   local args
   if [ "$DRY_RUN" = "true" ]; then
-    log "dry-run: initialize config at $CONFIG_PATH if missing"
-    log "dry-run: configure listener $LISTEN_HOST:$LISTEN_PORT"
+    log_i "dry-run: initialize config at $CONFIG_PATH if missing" "dry-run：如果配置不存在，则初始化 $CONFIG_PATH"
+    log_i "dry-run: configure listener $LISTEN_HOST:$LISTEN_PORT" "dry-run：配置监听地址 $LISTEN_HOST:$LISTEN_PORT"
     return 0
   fi
 
   if [ ! -x "$bin" ]; then
-    fail "warppool binary is not executable: $bin"
+    fail_i "warppool binary is not executable: $bin" "warppool 二进制不可执行：$bin"
   fi
 
   if [ ! -f "$CONFIG_PATH" ]; then
     "$bin" --config "$CONFIG_PATH" config init
   else
-    log "config already exists, keeping: $CONFIG_PATH"
+    log_i "config already exists, keeping: $CONFIG_PATH" "配置已存在，保留原配置：$CONFIG_PATH"
   fi
 
   args=(--config "$CONFIG_PATH" listen config --host "$LISTEN_HOST" --port "$LISTEN_PORT")
@@ -400,16 +477,16 @@ initialize_config() {
 create_systemd_services() {
   local bin="$INSTALL_DIR/warppool"
   if [ "$DRY_RUN" = "true" ]; then
-    log "dry-run: create systemd service for Deploy Token listener"
-    log "dry-run: create systemd service for local proxy"
+    log_i "dry-run: create systemd service for Deploy Token listener" "dry-run：创建 Deploy Token 监听 systemd 服务"
+    log_i "dry-run: create systemd service for local proxy" "dry-run：创建本地代理 systemd 服务"
     return 0
   fi
   if [ "$OS_ID" = "alpine" ]; then
-    log "warning: systemd service creation skipped on Alpine"
+    log_i "warning: systemd service creation skipped on Alpine" "警告：Alpine 上跳过 systemd 服务创建"
     return 0
   fi
   if ! command -v systemctl >/dev/null 2>&1; then
-    log "warning: systemctl not found, Deploy Token listener service not created"
+    log_i "warning: systemctl not found, Deploy Token listener service not created" "警告：未找到 systemctl，未创建 Deploy Token 监听服务"
     return 0
   fi
 
@@ -419,6 +496,29 @@ create_systemd_services() {
 }
 
 print_next_steps() {
+  if [ "$LANGUAGE" = "zh" ]; then
+    cat <<EOF
+
+WarpPool 主服务器安装完成。
+
+监听配置：
+  主机：$LISTEN_HOST
+  端口：$LISTEN_PORT
+  配置：$CONFIG_PATH
+
+后续常用命令：
+  warppool deploy --name nat01 --exit-mode direct --proxy mixed --port 10133 --ssh-host <出口节点IP> --ssh-user root
+  warppool wg up nat01
+  warppool proxy service enable
+
+Deploy Token 监听已完成配置，但不会自动启动。
+只在需要时启动：
+  warppool listen start
+
+EOF
+    return 0
+  fi
+
   cat <<EOF
 
 WarpPool main server installation completed.
@@ -442,6 +542,7 @@ EOF
 
 main() {
   parse_args "$@"
+  select_language
   require_root
   require_linux
   load_os_release
@@ -450,9 +551,9 @@ main() {
   install_base_packages
   choose_listen_port
 
-  log "detected OS: $OS_ID $OS_VERSION"
-  log "detected arch: $ARCH"
-  log "selected listener: $LISTEN_HOST:$LISTEN_PORT"
+  log_i "detected OS: $OS_ID $OS_VERSION" "检测到系统：$OS_ID $OS_VERSION"
+  log_i "detected arch: $ARCH" "检测到架构：$ARCH"
+  log_i "selected listener: $LISTEN_HOST:$LISTEN_PORT" "已选择监听地址：$LISTEN_HOST:$LISTEN_PORT"
 
   download_and_install_warppool
   install_singbox
