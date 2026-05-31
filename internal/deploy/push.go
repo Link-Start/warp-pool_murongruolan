@@ -31,6 +31,7 @@ type PushOptions struct {
 	SkipWGUp       bool
 	SkipForwarding bool
 	SkipPortCheck  bool
+	WarpPort       int
 }
 
 type PushResult struct {
@@ -96,6 +97,9 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 		if wgOptions.EnableForwarding {
 			result.Logs = append(result.Logs, "dry-run: enable IPv4 forwarding and direct MASQUERADE")
 		}
+		if opts.Node.ExitMode == config.ExitModeWarp {
+			result.Logs = append(result.Logs, fmt.Sprintf("dry-run: enable WARP forwarding for %s", wgPlan.Device))
+		}
 		return cfg, result, nil
 	}
 
@@ -147,9 +151,42 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	if err := configureRemoteWireGuard(client, wgPlan, opts.RemoteDir, opts.SkipWGUp, &result); err != nil {
 		return cfg, result, err
 	}
+	if opts.Node.ExitMode == config.ExitModeWarp && !opts.SkipWGUp {
+		if err := configureRemoteWarpForwarding(client, wgPlan, opts.RemoteDir, opts.WarpPort, &result); err != nil {
+			return cfg, result, err
+		}
+	}
 
 	next, err := config.AddNode(cfg, opts.Node)
 	return next, result, err
+}
+
+func configureRemoteWarpForwarding(client *sshclient.Client, plan wireguard.Plan, remoteDir string, warpPort int, result *PushResult) error {
+	if warpPort == 0 {
+		warpPort = 14000
+	}
+	scriptPath := filepath.ToSlash(filepath.Join(remoteDir, "warp_forward.sh"))
+	command := fmt.Sprintf(
+		"if [ -x %s ]; then bash %s %s %s %s %s; else echo '[WarpPool][warp-forward][ERROR] warp_forward.sh not found in deploy assets' >&2; exit 1; fi",
+		shellPath(scriptPath),
+		shellPath(scriptPath),
+		shellPath("action=up"),
+		shellPath("device="+plan.Device),
+		shellPath("client_addr="+plan.ClientAddress),
+		shellPath(fmt.Sprintf("transparent_port=%d", warpPort)),
+	)
+	remoteResult, err := client.Run(command)
+	if remoteResult.Stdout != "" {
+		result.Logs = append(result.Logs, remoteResult.Stdout)
+	}
+	if remoteResult.Stderr != "" {
+		result.Logs = append(result.Logs, remoteResult.Stderr)
+	}
+	if err != nil {
+		return fmt.Errorf("warp forwarding failed: %w", err)
+	}
+	result.Logs = append(result.Logs, "WARP forwarding enabled: "+plan.Device)
+	return nil
 }
 
 func uploadAssets(client *sshclient.Client, assetsDir string, remoteDir string, result *PushResult) error {

@@ -58,6 +58,9 @@ func TestPushDryRunWarpSkipsDirectForwarding(t *testing.T) {
 	if containsLog(result.Logs, "dry-run: enable IPv4 forwarding and direct MASQUERADE") {
 		t.Fatalf("expected warp mode to skip direct forwarding log, got %#v", result.Logs)
 	}
+	if !containsLog(result.Logs, "dry-run: enable WARP forwarding") {
+		t.Fatalf("expected warp forwarding dry-run log, got %#v", result.Logs)
+	}
 }
 
 func TestPushDryRunRejectsDuplicatePort(t *testing.T) {
