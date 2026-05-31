@@ -70,6 +70,31 @@ func TestPrepareUpRunsWGQuickOnLinux(t *testing.T) {
 	}
 }
 
+func TestPrepareUpEnablesBootOnLinux(t *testing.T) {
+	dir := t.TempDir()
+	runner := &fakeRunner{out: "ok"}
+
+	result, err := PrepareUp(testNode(), Options{
+		Runtime:    RuntimeLinux,
+		ConfigDir:  dir,
+		Runner:     runner,
+		EnableBoot: true,
+	})
+	if err != nil {
+		t.Fatalf("prepare up: %v", err)
+	}
+
+	if len(runner.calls) != 2 {
+		t.Fatalf("expected two commands, got %#v", runner.calls)
+	}
+	if runner.calls[1] != "systemctl enable wg-quick@wpcnat1" {
+		t.Fatalf("unexpected enable command: %s", runner.calls[1])
+	}
+	if !containsLog(result.Logs, "WireGuard client enabled on boot: wpcnat1") {
+		t.Fatalf("expected enable log, got %#v", result.Logs)
+	}
+}
+
 func TestDownRunsWGQuickOnLinux(t *testing.T) {
 	runner := &fakeRunner{}
 

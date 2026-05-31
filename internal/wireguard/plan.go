@@ -31,9 +31,14 @@ type Options struct {
 	Node             config.Node
 	CIDR             string
 	Endpoint         string
+	EndpointPort     int
 	ListenPort       int
 	EgressInterface  string
 	EnableForwarding bool
+	ServerPrivateKey string
+	ServerPublicKey  string
+	ClientPrivateKey string
+	ClientPublicKey  string
 }
 
 func BuildPlan(cfg config.Config, opts Options) (Plan, error) {
@@ -43,17 +48,35 @@ func BuildPlan(cfg config.Config, opts Options) (Plan, error) {
 	if opts.ListenPort == 0 {
 		opts.ListenPort = DefaultListenPort
 	}
+	if opts.EndpointPort == 0 {
+		opts.EndpointPort = opts.ListenPort
+	}
 	if opts.Endpoint == "" {
 		return Plan{}, fmt.Errorf("wireguard endpoint is required")
 	}
 
-	serverKey, err := GenerateKeyPair()
-	if err != nil {
-		return Plan{}, err
+	serverKey := KeyPair{
+		PrivateKey: opts.ServerPrivateKey,
+		PublicKey:  opts.ServerPublicKey,
 	}
-	clientKey, err := GenerateKeyPair()
-	if err != nil {
-		return Plan{}, err
+	if serverKey.PrivateKey == "" || serverKey.PublicKey == "" {
+		var err error
+		serverKey, err = GenerateKeyPair()
+		if err != nil {
+			return Plan{}, err
+		}
+	}
+
+	clientKey := KeyPair{
+		PrivateKey: opts.ClientPrivateKey,
+		PublicKey:  opts.ClientPublicKey,
+	}
+	if clientKey.PrivateKey == "" || clientKey.PublicKey == "" {
+		var err error
+		clientKey, err = GenerateKeyPair()
+		if err != nil {
+			return Plan{}, err
+		}
 	}
 
 	serverIP, clientIP, err := AllocatePair(cfg, opts.CIDR)
@@ -65,7 +88,7 @@ func BuildPlan(cfg config.Config, opts Options) (Plan, error) {
 	plan := Plan{
 		Device:           device,
 		ListenPort:       opts.ListenPort,
-		Endpoint:         fmt.Sprintf("%s:%d", opts.Endpoint, opts.ListenPort),
+		Endpoint:         FormatEndpoint(opts.Endpoint, opts.EndpointPort),
 		EgressInterface:  opts.EgressInterface,
 		EnableForwarding: opts.EnableForwarding,
 		ServerAddress:    serverIP + "/30",
@@ -79,6 +102,18 @@ func BuildPlan(cfg config.Config, opts Options) (Plan, error) {
 	plan.ServerConfig = RenderServerConfig(plan)
 	plan.ClientConfig = RenderClientConfig(plan)
 	return plan, nil
+}
+
+func FormatEndpoint(host string, port int) string {
+	if strings.Contains(host, ":") {
+		if _, _, err := net.SplitHostPort(host); err == nil {
+			return host
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			return net.JoinHostPort(host, fmt.Sprintf("%d", port))
+		}
+	}
+	return fmt.Sprintf("%s:%d", host, port)
 }
 
 func ApplyPlan(node config.Node, plan Plan) config.Node {
@@ -171,13 +206,13 @@ func AllocatePair(cfg config.Config, cidr string) (string, string, error) {
 
 	used := map[string]bool{}
 	for _, node := range cfg.Nodes {
-		for _, value := range []string{node.WGServerAddress, node.WGClientAddress, node.WGAddress} {
-			if value == "" {
-				continue
-			}
-			host := strings.Split(value, "/")[0]
-			used[host] = true
+		markUsedAddresses(used, node)
+	}
+	for _, token := range cfg.Tokens {
+		if token.Used {
+			continue
 		}
+		markUsedAddresses(used, token.Node)
 	}
 
 	networkIP := ipNet.IP.To4()
@@ -198,6 +233,16 @@ func AllocatePair(cfg config.Config, cidr string) (string, string, error) {
 	}
 
 	return "", "", fmt.Errorf("no available wireguard address pair in %s", cidr)
+}
+
+func markUsedAddresses(used map[string]bool, node config.Node) {
+	for _, value := range []string{node.WGServerAddress, node.WGClientAddress, node.WGAddress} {
+		if value == "" {
+			continue
+		}
+		host := strings.Split(value, "/")[0]
+		used[host] = true
+	}
 }
 
 func uint32ToIP(value uint32) string {

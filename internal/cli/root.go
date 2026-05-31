@@ -1,10 +1,14 @@
 package cli
 
 import (
+	"io"
+	"os"
+
 	"github.com/spf13/cobra"
 )
 
 var configPath string
+var inputReader io.Reader = defaultInputReader()
 
 var (
 	version = "dev"
@@ -15,6 +19,10 @@ var (
 func Execute() error {
 	root := NewRootCommand()
 	return root.Execute()
+}
+
+func defaultInputReader() io.Reader {
+	return os.Stdin
 }
 
 func NewRootCommand() *cobra.Command {

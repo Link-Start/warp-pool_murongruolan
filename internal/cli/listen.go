@@ -6,7 +6,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,6 +28,7 @@ func newListenCommand() *cobra.Command {
 	cmd.AddCommand(newListenStartCommand())
 	cmd.AddCommand(newListenStopCommand())
 	cmd.AddCommand(newListenStatusCommand())
+	cmd.AddCommand(newListenServiceCommand())
 	return cmd
 }
 
@@ -223,4 +227,123 @@ func listenURL(host string, port int) string {
 		host = "<主服务器IP>"
 	}
 	return fmt.Sprintf("http://%s:%d", host, port)
+}
+
+func newListenServiceCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "service",
+		Short: "Manage Deploy Token listener systemd service",
+	}
+
+	cmd.AddCommand(newListenServiceInstallCommand())
+	cmd.AddCommand(newListenServiceEnableCommand())
+	cmd.AddCommand(newListenServiceDisableCommand())
+	return cmd
+}
+
+func newListenServiceInstallCommand() *cobra.Command {
+	var unitPath string
+	var warppoolBin string
+
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Install systemd service for Deploy Token listener",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if runtime.GOOS != "linux" {
+				return fmt.Errorf("systemd service installation is only supported on Linux")
+			}
+			if unitPath == "" {
+				unitPath = "/etc/systemd/system/warppool-listen.service"
+			}
+			if warppoolBin == "" {
+				bin, err := os.Executable()
+				if err != nil {
+					return fmt.Errorf("detect warppool executable: %w", err)
+				}
+				warppoolBin = bin
+			}
+
+			service := renderListenService(warppoolBin, resolvedConfigPath())
+			if err := os.WriteFile(unitPath, []byte(service), 0o644); err != nil {
+				return fmt.Errorf("write systemd service %s: %w", unitPath, err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "installed service: %s\n", unitPath)
+			if err := runSystemctl("daemon-reload"); err != nil {
+				return err
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&unitPath, "unit-path", "", "systemd unit path")
+	cmd.Flags().StringVar(&warppoolBin, "warppool-bin", "", "warppool binary path")
+	return cmd
+}
+
+func newListenServiceEnableCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "enable",
+		Short: "Enable Deploy Token listener on boot",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if runtime.GOOS != "linux" {
+				return fmt.Errorf("systemd service is only supported on Linux")
+			}
+			if err := runSystemctl("enable", "warppool-listen.service"); err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "enabled service: warppool-listen.service")
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newListenServiceDisableCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "disable",
+		Short: "Disable Deploy Token listener on boot",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if runtime.GOOS != "linux" {
+				return fmt.Errorf("systemd service is only supported on Linux")
+			}
+			if err := runSystemctl("disable", "warppool-listen.service"); err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "disabled service: warppool-listen.service")
+			return nil
+		},
+	}
+	return cmd
+}
+
+func renderListenService(warppoolBin string, configPath string) string {
+	return fmt.Sprintf(`[Unit]
+Description=WarpPool Deploy Token Listener
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%s --config %s listen start
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target
+`, systemdEscapeArg(warppoolBin), systemdEscapeArg(configPath))
+}
+
+func systemdEscapeArg(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func runSystemctl(args ...string) error {
+	out, err := exec.Command("systemctl", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("systemctl %v failed: %w: %s", args, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }

@@ -2,9 +2,13 @@
 set -Eeuo pipefail
 
 MODE="direct"
+MODE_SET="false"
 DRY_RUN="false"
 TOKEN=""
 SERVER=""
+ENDPOINT=""
+WG_LISTEN_PORT="51820"
+WG_ENDPOINT_PORT=""
 BASE_URL="${WARPOOL_INSTALL_BASE_URL:-https://raw.githubusercontent.com/murongruolan/warp-pool/developer/assets}"
 DOWNLOAD_DIR=""
 
@@ -31,12 +35,13 @@ usage() {
 WarpPool node installer
 
 Usage:
-  bash install.sh [mode=direct|warp] [token=xxx] [server=http://host:port] [base_url=https://...] [--dry-run]
+  bash install.sh [mode=direct|warp] [token=xxx] [server=http://host:port] [endpoint=host] [wg_listen_port=51820] [wg_endpoint_port=51820] [base_url=https://...] [--dry-run]
 
 Examples:
   bash install.sh
   bash install.sh mode=warp
   bash install.sh token=xxxxx server=http://1.2.3.4:18080
+  bash install.sh token=xxxxx server=http://1.2.3.4:8080 endpoint=5.6.7.8 wg_listen_port=51820 wg_endpoint_port=30021
   bash install.sh base_url=https://example.com/assets
   bash install.sh --dry-run mode=direct
 USAGE
@@ -62,12 +67,22 @@ parse_args() {
         ;;
       mode=*)
         MODE="${arg#mode=}"
+        MODE_SET="true"
         ;;
       token=*)
         TOKEN="${arg#token=}"
         ;;
       server=*)
         SERVER="${arg#server=}"
+        ;;
+      endpoint=*)
+        ENDPOINT="${arg#endpoint=}"
+        ;;
+      wg_listen_port=*)
+        WG_LISTEN_PORT="${arg#wg_listen_port=}"
+        ;;
+      wg_endpoint_port=*)
+        WG_ENDPOINT_PORT="${arg#wg_endpoint_port=}"
         ;;
       base_url=*)
         BASE_URL="${arg#base_url=}"
@@ -93,6 +108,41 @@ validate_mode() {
       fail "unsupported mode: $MODE, expected direct or warp"
       ;;
   esac
+}
+
+is_interactive() {
+  [ -r /dev/tty ] && [ -w /dev/tty ]
+}
+
+choose_mode() {
+  if [ "$MODE_SET" = "true" ]; then
+    return 0
+  fi
+  if ! is_interactive; then
+    return 0
+  fi
+
+  local choice
+  while true; do
+    printf 'WarpPool node exit mode:\n' >/dev/tty
+    printf '  1. direct\n' >/dev/tty
+    printf '  2. warp\n' >/dev/tty
+    printf 'Select [1]: ' >/dev/tty
+    read -r choice </dev/tty
+    case "$choice" in
+      ""|1)
+        MODE="direct"
+        return 0
+        ;;
+      2)
+        MODE="warp"
+        return 0
+        ;;
+      *)
+        printf '[WarpPool] invalid selection\n' >/dev/tty
+        ;;
+    esac
+  done
 }
 
 validate_registration_args() {
@@ -239,6 +289,9 @@ prepare_child_script() {
   child="$DOWNLOAD_DIR/$CHILD_SCRIPT"
   download_script "$CHILD_SCRIPT" "$child"
   download_script "warp_install.sh" "$DOWNLOAD_DIR/warp_install.sh"
+  download_script "wg_preflight.sh" "$DOWNLOAD_DIR/wg_preflight.sh"
+  download_script "warp_forward.sh" "$DOWNLOAD_DIR/warp_forward.sh"
+  download_script "singbox_install.sh" "$DOWNLOAD_DIR/singbox_install.sh"
   printf '%s\n' "$child"
 }
 
@@ -251,15 +304,16 @@ dispatch_child_script() {
 
   log "dispatching to $CHILD_SCRIPT, mode=$MODE"
   if [ "$DRY_RUN" = "true" ]; then
-    bash "$child" --dry-run "mode=$MODE" "token=$TOKEN" "server=$SERVER"
+    bash "$child" --dry-run "mode=$MODE" "token=$TOKEN" "server=$SERVER" "endpoint=$ENDPOINT" "wg_listen_port=$WG_LISTEN_PORT" "wg_endpoint_port=$WG_ENDPOINT_PORT"
     return 0
   fi
 
-  run bash "$child" "mode=$MODE" "token=$TOKEN" "server=$SERVER"
+  run bash "$child" "mode=$MODE" "token=$TOKEN" "server=$SERVER" "endpoint=$ENDPOINT" "wg_listen_port=$WG_LISTEN_PORT" "wg_endpoint_port=$WG_ENDPOINT_PORT"
 }
 
 main() {
   parse_args "$@"
+  choose_mode
   validate_mode
   validate_registration_args
   require_root

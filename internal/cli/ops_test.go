@@ -28,6 +28,14 @@ func TestBuildDoctorChecksIncludesNodePort(t *testing.T) {
 	}
 }
 
+func TestValidateLocalProxyPortRejectsReservedPort(t *testing.T) {
+	cfg := config.Default()
+	cfg.Nodes = append(cfg.Nodes, config.Node{Name: "nat1", BindHost: "127.0.0.1", LocalPort: 10133})
+	if err := validateLocalProxyPort(cfg, "127.0.0.1", 10133); err == nil {
+		t.Fatal("expected reserved port error")
+	}
+}
+
 func hasDoctorCheck(checks []DoctorCheck, name string) bool {
 	for _, check := range checks {
 		if check.Name == name {

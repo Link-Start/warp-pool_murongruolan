@@ -15,6 +15,9 @@ func newDeployTokenCommand() *cobra.Command {
 	var ttl time.Duration
 	var publicHost string
 	var repoBaseURL string
+	var endpoint string
+	var wgListenPort int
+	var wgEndpointPort int
 
 	cmd := &cobra.Command{
 		Use:   "deploy-token",
@@ -24,6 +27,10 @@ func newDeployTokenCommand() *cobra.Command {
 			cfg, err := config.Load(path)
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
+			}
+			prompt := newPromptIO(cmd.OutOrStdout())
+			if err := promptDeployTokenOptions(prompt, cfg, &node); err != nil {
+				return err
 			}
 			if !cfg.Listen.Enabled {
 				return fmt.Errorf("registration listener is not enabled, run: warppool listen start")
@@ -72,14 +79,26 @@ func newDeployTokenCommand() *cobra.Command {
 
 			fmt.Fprintf(cmd.OutOrStdout(), "token expires at: %s\n", expiresAt.Format(time.RFC3339))
 			fmt.Fprintln(cmd.OutOrStdout(), "install command:")
-			fmt.Fprintf(cmd.OutOrStdout(), "curl -fsSL %s/install.sh | bash -s -- mode=%s token=%s server=%s\n", repoBaseURL, node.ExitMode, tokenValue, serverURL)
+			installArgs := fmt.Sprintf("mode=%s token=%s server=%s", node.ExitMode, tokenValue, serverURL)
+			if endpoint != "" {
+				installArgs += fmt.Sprintf(" endpoint=%s", endpoint)
+			}
+			if wgListenPort != 0 {
+				installArgs += fmt.Sprintf(" wg_listen_port=%d", wgListenPort)
+			}
+			if wgEndpointPort != 0 {
+				installArgs += fmt.Sprintf(" wg_endpoint_port=%d", wgEndpointPort)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "wget -qO- %s/install.sh | sudo bash -s -- %s\n", repoBaseURL, installArgs)
+			fmt.Fprintln(cmd.OutOrStdout(), "or:")
+			fmt.Fprintf(cmd.OutOrStdout(), "curl -fsSL %s/install.sh | sudo bash -s -- %s\n", repoBaseURL, installArgs)
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&node.Name, "name", "", "node name")
-	cmd.Flags().StringVar(&node.ExitMode, "exit-mode", config.ExitModeDirect, "exit mode: direct or warp")
-	cmd.Flags().StringVar(&node.Proxy, "proxy", config.ProxyMixed, "local proxy protocol: socks5, http, or mixed")
+	cmd.Flags().StringVar(&node.ExitMode, "exit-mode", "", "exit mode: direct or warp")
+	cmd.Flags().StringVar(&node.Proxy, "proxy", "", "local proxy protocol: socks5, http, or mixed")
 	cmd.Flags().StringVar(&node.BindHost, "bind-host", "127.0.0.1", "local proxy bind host")
 	cmd.Flags().IntVar(&node.LocalPort, "port", 0, "local proxy port")
 	cmd.Flags().StringVar(&node.Country, "country", "", "node country or region")
@@ -87,10 +106,40 @@ func newDeployTokenCommand() *cobra.Command {
 	cmd.Flags().DurationVar(&ttl, "ttl", config.DefaultDeployTokenTTL, "token TTL")
 	cmd.Flags().StringVar(&publicHost, "public-host", "", "public host/IP for generated install command")
 	cmd.Flags().StringVar(&repoBaseURL, "repo-base-url", "", "installer assets base URL")
+	cmd.Flags().StringVar(&endpoint, "wg-endpoint", "", "WireGuard public endpoint host/IP for the main server to connect, node installer auto-detects when empty")
+	cmd.Flags().IntVar(&wgListenPort, "wg-listen-port", 0, "WireGuard listen port on the node")
+	cmd.Flags().IntVar(&wgEndpointPort, "wg-endpoint-port", 0, "WireGuard public endpoint port, useful for NAT port forwarding")
 
-	_ = cmd.MarkFlagRequired("name")
-	_ = cmd.MarkFlagRequired("port")
 	return cmd
+}
+
+func promptDeployTokenOptions(prompt promptIO, cfg config.Config, node *config.Node) error {
+	var err error
+	node.Name, err = prompt.askRequired("Node name", node.Name)
+	if err != nil {
+		return err
+	}
+	node.ExitMode, err = prompt.askMenu("Exit mode", node.ExitMode, defaultString(cfg.Defaults.ExitMode, config.ExitModeDirect), []menuOption{
+		{Label: "direct", Value: config.ExitModeDirect},
+		{Label: "warp", Value: config.ExitModeWarp},
+	})
+	if err != nil {
+		return err
+	}
+	node.Proxy, err = prompt.askMenu("Local proxy protocol", node.Proxy, defaultString(cfg.Defaults.Proxy, config.ProxyMixed), []menuOption{
+		{Label: "mixed", Value: config.ProxyMixed},
+		{Label: "socks5", Value: config.ProxySocks5},
+		{Label: "http", Value: config.ProxyHTTP},
+	})
+	if err != nil {
+		return err
+	}
+	bindHost := node.BindHost
+	if bindHost == "" {
+		bindHost = cfg.Defaults.BindHost
+	}
+	node.LocalPort, err = promptAvailableLocalPort(prompt, cfg, bindHost, node.LocalPort)
+	return err
 }
 
 func checkListenReachable(host string, port int) error {

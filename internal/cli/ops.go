@@ -167,22 +167,6 @@ func newShowCommand() *cobra.Command {
 	return cmd
 }
 
-func newUninstallCommand() *cobra.Command {
-	var assetsDir string
-	cmd := &cobra.Command{
-		Use:   "uninstall",
-		Short: "Print or run local uninstall helper",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			path := assetsDir + string(os.PathSeparator) + "uninstall.sh"
-			fmt.Fprintf(cmd.OutOrStdout(), "uninstall helper: %s\n", path)
-			fmt.Fprintln(cmd.OutOrStdout(), "remote uninstall is intentionally not automatic in MVP")
-			return nil
-		},
-	}
-	cmd.Flags().StringVar(&assetsDir, "assets-dir", "assets", "assets directory")
-	return cmd
-}
-
 func newUpgradeCommand() *cobra.Command {
 	var assetsDir string
 	cmd := &cobra.Command{

@@ -24,6 +24,7 @@ type Options struct {
 	ConfigDir  string
 	Runner     CommandRunner
 	SkipSystem bool
+	EnableBoot bool
 }
 
 type Result struct {
@@ -89,6 +90,17 @@ func PrepareUp(node config.Node, opts Options) (Result, error) {
 		return result, fmt.Errorf("wg-quick up %s: %w", path, err)
 	}
 	result.Logs = append(result.Logs, "WireGuard client started: "+device)
+
+	if opts.EnableBoot {
+		output, err = opts.Runner.Run("systemctl", "enable", "wg-quick@"+device)
+		if len(output) > 0 {
+			result.Logs = append(result.Logs, strings.TrimSpace(string(output)))
+		}
+		if err != nil {
+			return result, fmt.Errorf("systemctl enable wg-quick@%s: %w", device, err)
+		}
+		result.Logs = append(result.Logs, "WireGuard client enabled on boot: "+device)
+	}
 	return result, nil
 }
 

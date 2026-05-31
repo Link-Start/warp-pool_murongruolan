@@ -29,6 +29,7 @@ type PushOptions struct {
 	RemoteDir      string
 	AssetsDir      string
 	WGEndpoint     string
+	WGEndpointPort int
 	WGListenPort   int
 	SkipWGUp       bool
 	SkipForwarding bool
@@ -60,6 +61,9 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	if opts.WGEndpoint == "" {
 		opts.WGEndpoint = opts.SSH.Host
 	}
+	if opts.WGEndpointPort == 0 {
+		opts.WGEndpointPort = opts.WGListenPort
+	}
 	if opts.Node.PublicIP == "" {
 		opts.Node.PublicIP = opts.SSH.Host
 	}
@@ -77,6 +81,7 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	wgOptions := wireguard.Options{
 		Node:             opts.Node,
 		Endpoint:         opts.WGEndpoint,
+		EndpointPort:     opts.WGEndpointPort,
 		ListenPort:       opts.WGListenPort,
 		EnableForwarding: opts.Node.ExitMode == config.ExitModeDirect && !opts.SkipForwarding,
 	}

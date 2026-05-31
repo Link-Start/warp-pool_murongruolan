@@ -81,6 +81,7 @@ func newWGUpCommand() *cobra.Command {
 
 	cmd.Flags().StringVar(&opts.ConfigDir, "config-dir", "", "WireGuard client config directory")
 	cmd.Flags().BoolVar(&opts.SkipSystem, "skip-system", false, "write config only, do not run wg-quick")
+	cmd.Flags().BoolVar(&opts.EnableBoot, "enable-boot", true, "enable wg-quick systemd service on Linux")
 	return cmd
 }
 

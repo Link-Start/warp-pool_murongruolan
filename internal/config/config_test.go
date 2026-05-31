@@ -226,6 +226,46 @@ func TestDeployTokenRejectsExpired(t *testing.T) {
 	}
 }
 
+func TestPrepareAndCompleteDeployToken(t *testing.T) {
+	cfg := Default()
+	cfg, err := AddDeployToken(cfg, DeployToken{
+		Token:     "token-1",
+		ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		Node: Node{
+			Name:      "nat1",
+			ExitMode:  ExitModeDirect,
+			Proxy:     ProxyMixed,
+			BindHost:  "127.0.0.1",
+			LocalPort: 10013,
+		},
+	})
+	if err != nil {
+		t.Fatalf("add token: %v", err)
+	}
+
+	prepared := cfg.Tokens[0].Node
+	prepared.WGDevice = "wpnat1"
+	prepared.WGClientConfig = "client"
+	cfg, err = PrepareDeployToken(cfg, "token-1", prepared, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("prepare token: %v", err)
+	}
+	if !cfg.Tokens[0].Prepared {
+		t.Fatal("expected token prepared")
+	}
+
+	next, node, err := CompleteDeployToken(cfg, "token-1", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("complete token: %v", err)
+	}
+	if node.WGDevice != "wpnat1" {
+		t.Fatalf("unexpected node: %#v", node)
+	}
+	if len(next.Nodes) != 1 || !next.Tokens[0].Used || !next.Tokens[0].Registered {
+		t.Fatalf("unexpected completed config: %#v", next)
+	}
+}
+
 func TestLoadRejectsOpenPermissionsOnUnix(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("windows permissions differ")

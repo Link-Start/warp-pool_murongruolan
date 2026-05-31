@@ -73,6 +73,7 @@ type DeployToken struct {
 	Node         Node   `json:"node"`
 	ExpiresAt    string `json:"expires_at"`
 	Used         bool   `json:"used"`
+	Prepared     bool   `json:"prepared,omitempty"`
 	Registered   bool   `json:"registered"`
 	RegisteredAt string `json:"registered_at,omitempty"`
 }
@@ -83,7 +84,7 @@ func Default() Config {
 		Listen: ListenConfig{
 			Host:       "0.0.0.0",
 			PublicHost: "",
-			Port:       18080,
+			Port:       8080,
 			Enabled:    false,
 		},
 		Defaults: Defaults{
@@ -408,4 +409,58 @@ func UseDeployToken(cfg Config, tokenValue string, now time.Time) (Config, Node,
 	}
 
 	return cfg, Node{}, errors.New("deploy token not found")
+}
+
+func FindDeployToken(cfg Config, tokenValue string, now time.Time) (int, DeployToken, error) {
+	for i, token := range cfg.Tokens {
+		if token.Token != tokenValue {
+			continue
+		}
+		if token.Used {
+			return i, token, errors.New("deploy token already used")
+		}
+
+		expiresAt, err := time.Parse(time.RFC3339, token.ExpiresAt)
+		if err != nil {
+			return i, token, fmt.Errorf("invalid deploy token expiry: %w", err)
+		}
+		if now.After(expiresAt) {
+			return i, token, errors.New("deploy token expired")
+		}
+		return i, token, nil
+	}
+	return -1, DeployToken{}, errors.New("deploy token not found")
+}
+
+func PrepareDeployToken(cfg Config, tokenValue string, node Node, now time.Time) (Config, error) {
+	index, token, err := FindDeployToken(cfg, tokenValue, now)
+	if err != nil {
+		return cfg, err
+	}
+	if err := ValidateNode(cfg, node); err != nil {
+		return cfg, err
+	}
+	token.Node = node
+	token.Prepared = true
+	cfg.Tokens[index] = token
+	return cfg, nil
+}
+
+func CompleteDeployToken(cfg Config, tokenValue string, now time.Time) (Config, Node, error) {
+	index, token, err := FindDeployToken(cfg, tokenValue, now)
+	if err != nil {
+		return cfg, Node{}, err
+	}
+	if !token.Prepared {
+		return cfg, Node{}, errors.New("deploy token is not prepared")
+	}
+
+	next, err := AddNode(cfg, token.Node)
+	if err != nil {
+		return cfg, Node{}, err
+	}
+	next.Tokens[index].Used = true
+	next.Tokens[index].Registered = true
+	next.Tokens[index].RegisteredAt = now.UTC().Format(time.RFC3339)
+	return next, token.Node, nil
 }
