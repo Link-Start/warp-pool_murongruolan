@@ -77,6 +77,7 @@ type DeployToken struct {
 	Prepared     bool   `json:"prepared,omitempty"`
 	Registered   bool   `json:"registered"`
 	RegisteredAt string `json:"registered_at,omitempty"`
+	AutoStart    bool   `json:"auto_start,omitempty"`
 }
 
 func Default() Config {
@@ -533,5 +534,6 @@ func CompleteDeployToken(cfg Config, tokenValue string, now time.Time) (Config, 
 	next.Tokens[index].Used = true
 	next.Tokens[index].Registered = true
 	next.Tokens[index].RegisteredAt = now.UTC().Format(time.RFC3339)
+	next.Tokens[index].AutoStart = token.AutoStart
 	return next, token.Node, nil
 }

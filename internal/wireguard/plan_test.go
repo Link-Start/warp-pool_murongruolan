@@ -125,6 +125,15 @@ func TestSafeDeviceNameAddsHashWhenTruncated(t *testing.T) {
 	}
 }
 
+func TestSafeDeviceNameNormalizesNonASCIISeparators(t *testing.T) {
+	if got := SafeDeviceName("美国NAT01"); got != "wpnat01" {
+		t.Fatalf("unexpected device name: %s", got)
+	}
+	if got := SafeDeviceName("美国节点"); !strings.HasPrefix(got, "wpnode-") {
+		t.Fatalf("unexpected fallback device name: %s", got)
+	}
+}
+
 func TestBuildPlanWithDirectForwarding(t *testing.T) {
 	cfg := config.Default()
 	plan, err := BuildPlan(cfg, Options{

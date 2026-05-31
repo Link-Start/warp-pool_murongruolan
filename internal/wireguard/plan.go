@@ -165,7 +165,6 @@ PersistentKeepalive = 25
 
 func SafeDeviceName(name string) string {
 	var b strings.Builder
-	b.WriteString("wp")
 	for _, r := range strings.ToLower(name) {
 		switch {
 		case r >= 'a' && r <= 'z':
@@ -173,13 +172,19 @@ func SafeDeviceName(name string) string {
 		case r >= '0' && r <= '9':
 			b.WriteRune(r)
 		default:
-			b.WriteRune('-')
+			if b.Len() > 0 {
+				b.WriteRune('-')
+			}
 		}
 	}
-	out := strings.Trim(b.String(), "-")
-	if out == "" || out == "wp" {
-		out = "wp-node"
+	safe := strings.Trim(b.String(), "-")
+	for strings.Contains(safe, "--") {
+		safe = strings.ReplaceAll(safe, "--", "-")
 	}
+	if safe == "" {
+		return "wpnode-" + shortHash(name)
+	}
+	out := "wp" + safe
 	if len(out) > 15 {
 		suffix := shortHash(name)
 		prefixLen := 15 - len(suffix) - 1

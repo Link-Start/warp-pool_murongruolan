@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/murongruolan/warp-pool/internal/config"
@@ -29,6 +30,7 @@ func newDeployCommand() *cobra.Command {
 			if err := promptDeployOptions(prompt, cfg, &opts); err != nil {
 				return err
 			}
+			opts.AssetsDir = resolveAssetsDir(opts.AssetsDir)
 			if opts.SSH.KnownHostsPath == "" && !opts.SSH.InsecureIgnoreHostKey {
 				if _, err := os.Stat(defaultKnownHostsPath()); err != nil {
 					if os.IsNotExist(err) {
@@ -71,6 +73,13 @@ func newDeployCommand() *cobra.Command {
 			if err := config.SaveExisting(path, next); err != nil {
 				return fmt.Errorf("save config: %w", err)
 			}
+			if !opts.DryRun && !opts.SkipWGUp {
+				if err := startProxyForNode(path, next, result.Node); err != nil {
+					fmt.Fprintf(cmd.OutOrStdout(), "%s\n", tr(language, "warning: deployed node but failed to start local proxy service: "+err.Error(), "警告：节点已部署，但启动本地代理服务失败："+err.Error()))
+				} else {
+					fmt.Fprintf(cmd.OutOrStdout(), "%s\n", tr(language, "local proxy service started", "本地代理服务已启动"))
+				}
+			}
 
 			if opts.DryRun {
 				fmt.Fprintf(cmd.OutOrStdout(), "validated deploy plan: %s\n", result.Node.Name)
@@ -108,6 +117,31 @@ func newDeployCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.SkipPortCheck, "skip-port-check", false, "skip system port availability check")
 
 	return cmd
+}
+
+func resolveAssetsDir(current string) string {
+	candidates := []string{}
+	if strings.TrimSpace(current) != "" && current != "assets" {
+		candidates = append(candidates, current)
+	}
+	candidates = append(candidates, "assets")
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "assets"))
+	}
+	candidates = append(candidates, "/usr/local/lib/warppool/assets")
+
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+	}
+	if strings.TrimSpace(current) != "" {
+		return current
+	}
+	return "assets"
 }
 
 func promptDeployOptions(prompt promptIO, cfg config.Config, opts *deploy.PushOptions) error {

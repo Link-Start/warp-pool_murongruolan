@@ -93,7 +93,7 @@ Exit node
 | OS | Status |
 | --- | --- |
 | Ubuntu 20.04+ | Supported |
-| Debian 12+ | Supported |
+| Debian 11+ | Supported |
 | Alpine 3.20+ | Supported |
 
 WARP mode depends on Cloudflare's official Linux client packages. Alpine WARP mode is not supported by the built-in installer.
@@ -158,7 +158,7 @@ wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/i
 Install a specific version:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install_server.sh | sudo bash -s -- version=v0.1.0
+wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install_server.sh | sudo bash -s -- version=v0.1.1
 ```
 
 ---
@@ -196,16 +196,10 @@ warppool deploy \
   --insecure-skip-host-key-check
 ```
 
-Start the local WireGuard client:
+Deployment starts the local proxy service automatically. To start it manually:
 
 ```bash
-warppool wg up nat01
-```
-
-Start local proxy:
-
-```bash
-warppool proxy service enable
+warppool node start nat01
 ```
 
 Test the proxy:
@@ -269,6 +263,7 @@ The script enters an interactive menu:
 2. Enter the main server IP/domain. Press Enter to skip auto registration.
 3. If a main server address is entered, enter the registration port. IPv4 defaults to `8080`; domains default to `80`.
 4. Enter a Deploy Token if auto registration is needed.
+5. For auto registration, enter the node-side WireGuard listen port and the public mapped WireGuard port used by the main server.
 
 If the main server IP or Deploy Token is left empty, the script only installs node dependencies. It will not write WireGuard config and will not create a node record on the main server. You can later run `warppool deploy-token` on the main server and execute the generated one-line command on the node.
 
@@ -306,7 +301,7 @@ Generate token command:
 warppool deploy-token
 ```
 
-The command will ask for node name, exit mode, proxy protocol, and local proxy port. It then prints a one-line node installation command. The exit node uses that command to request WireGuard config, start WireGuard, and complete registration.
+The command asks for node name, exit mode, proxy protocol, local proxy port, WireGuard listen port, and public mapped WireGuard port. It then prints the Deploy Token plus a one-line node installation command. The exit node uses that command to request WireGuard config, start WireGuard, and complete registration. After registration, the main server starts the local proxy service automatically.
 
 For NAT VPS nodes where the public UDP mapping differs from the node-side WireGuard listen port, generate the command with:
 
@@ -324,7 +319,10 @@ The generated node installer command will include `wg_listen_port` and `wg_endpo
 
 ```bash
 warppool node list # List nodes
-warppool show nat01 # Show node nat01 details
+warppool node show nat01 # Show node nat01 details and runtime status
+warppool node start nat01 # Start local proxy service for nat01 and enable autostart
+warppool node stop nat01 # Stop local proxy service
+warppool node status nat01 # Show node nat01 runtime status
 warppool remove nat01 # Remove node nat01 record only
 warppool node remove nat01 --clean-wg # Remove node nat01 and delete local WG client config
 ```
@@ -335,7 +333,7 @@ warppool node remove nat01 --clean-wg # Remove node nat01 and delete local WG cl
 
 ```bash
 warppool wg config nat01 # Print local WireGuard client config for nat01
-warppool wg up nat01 # Start local WireGuard client for nat01
+warppool wg up nat01 # Start system WireGuard client for diagnostics
 warppool wg status nat01 # Show local WireGuard status for nat01
 warppool wg down nat01 # Stop local WireGuard client for nat01
 ```
@@ -346,7 +344,7 @@ warppool wg down nat01 # Stop local WireGuard client for nat01
 warppool proxy config -o sing-box.json # Generate sing-box config
 warppool proxy start # Start local proxy as a temporary process
 warppool proxy service install # Create local proxy systemd service
-warppool proxy service enable # Start local proxy and enable autostart
+warppool proxy service enable # Start local proxy for all nodes and enable autostart
 warppool proxy status # Show local proxy status
 warppool proxy stop # Stop the temporary local proxy process
 ```
@@ -363,6 +361,7 @@ warppool export clash -o clash.yaml # Export Clash-compatible config
 warppool version # Show version information
 warppool doctor # Check local runtime and port status
 warppool ping nat01 # Test WireGuard connectivity to nat01
+warppool upgrade --yes # Upgrade binary and bundled installer assets
 warppool speedtest --proxy http://127.0.0.1:10133 # Run a simple speed test through a proxy
 ```
 
@@ -429,7 +428,7 @@ Published packages:
 `VERSION` contains one line:
 
 ```text
-0.1.0
+0.1.1
 ```
 
 From the `developer` branch:
@@ -459,4 +458,4 @@ The script checks the working tree, updates `VERSION`, creates a Chinese commit,
 - No database.
 - No multi-user permission model.
 - No remote Agent.
-- `upgrade` is currently a safe placeholder command.
+- `upgrade` updates the main binary and bundled installer assets. Existing config is preserved.

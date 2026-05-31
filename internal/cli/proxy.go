@@ -196,9 +196,10 @@ func newProxyServiceInstallCommand() *cobra.Command {
 			if runtime.GOOS != "linux" {
 				return fmt.Errorf("systemd service installation is only supported on Linux")
 			}
-			if unitPath == "" {
-				unitPath = "/etc/systemd/system/warppool-proxy.service"
+			if unitPath != "" && unitPath != "/etc/systemd/system/warppool-proxy.service" {
+				return fmt.Errorf("custom proxy unit path is not supported by start/stop yet: %s", unitPath)
 			}
+			unitPath = "/etc/systemd/system/warppool-proxy.service"
 			if warppoolBin == "" {
 				bin, err := os.Executable()
 				if err != nil {
@@ -220,15 +221,61 @@ func newProxyServiceInstallCommand() *cobra.Command {
 	return cmd
 }
 
+func ensureProxyServiceInstalled(configPath string) error {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+	unitPath := "/etc/systemd/system/warppool-proxy.service"
+	bin, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("detect warppool executable: %w", err)
+	}
+	service := renderProxyService(bin, configPath, singbox.ResolveBinary("", runtime.GOOS))
+	if err := os.WriteFile(unitPath, []byte(service), 0o644); err != nil {
+		return fmt.Errorf("write systemd service %s: %w", unitPath, err)
+	}
+	return runSystemctl("daemon-reload")
+}
+
+func startProxyService(configPath string) error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("systemd service is only supported on Linux")
+	}
+	if !fileExistsLocal(singbox.DefaultConfigPath()) {
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+		data, err := buildAndValidateProxyConfig(cfg, singbox.Options{})
+		if err != nil {
+			return err
+		}
+		if err := singbox.WriteConfig(singbox.DefaultConfigPath(), data); err != nil {
+			return fmt.Errorf("write sing-box config: %w", err)
+		}
+	}
+	if err := ensureProxyServiceInstalled(configPath); err != nil {
+		return err
+	}
+	if err := runSystemctl("enable", "warppool-proxy.service"); err != nil {
+		return err
+	}
+	return runSystemctl("restart", "warppool-proxy.service")
+}
+
+func stopProxyService() error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("systemd service is only supported on Linux")
+	}
+	return runSystemctl("disable", "--now", "warppool-proxy.service")
+}
+
 func newProxyServiceEnableCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "enable",
 		Short: "Enable local proxy on boot",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if runtime.GOOS != "linux" {
-				return fmt.Errorf("systemd service is only supported on Linux")
-			}
-			if err := runSystemctl("enable", "--now", "warppool-proxy.service"); err != nil {
+			if err := startProxyService(resolvedConfigPath()); err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "enabled service: warppool-proxy.service")
@@ -243,10 +290,7 @@ func newProxyServiceDisableCommand() *cobra.Command {
 		Use:   "disable",
 		Short: "Disable local proxy service",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if runtime.GOOS != "linux" {
-				return fmt.Errorf("systemd service is only supported on Linux")
-			}
-			if err := runSystemctl("disable", "--now", "warppool-proxy.service"); err != nil {
+			if err := stopProxyService(); err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "disabled service: warppool-proxy.service")

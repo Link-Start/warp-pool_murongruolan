@@ -65,7 +65,7 @@ Usage:
   curl -fsSL https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install_server.sh | sudo bash
 
 Options:
-  version=latest|v0.1.0
+  version=latest|v0.1.1
   repo=owner/name
   port=8080
   public_host=1.2.3.4
@@ -280,8 +280,8 @@ check_supported_os() {
   major="$(version_major "$OS_VERSION")"
   case "$OS_ID" in
     debian)
-      if [ "$major" -lt 12 ]; then
-        fail_i "unsupported Debian version: $OS_VERSION, expected Debian 12+" "不支持当前 Debian 版本：$OS_VERSION，需要 Debian 12+"
+      if [ "$major" -lt 11 ]; then
+        fail_i "unsupported Debian version: $OS_VERSION, expected Debian 11+" "不支持当前 Debian 版本：$OS_VERSION，需要 Debian 11+"
       fi
       ;;
     ubuntu)
@@ -495,6 +495,9 @@ download_and_install_warppool() {
   assets_dir="$(find "$WORK_DIR" -type d -name assets | head -n 1 || true)"
   if [ -n "$assets_dir" ]; then
     cp -R "$assets_dir/." "$LIB_DIR/assets/"
+    if [ "$RELEASE_VERSION" != "latest" ]; then
+      printf '%s\n' "$RELEASE_VERSION" >"$LIB_DIR/VERSION" || true
+    fi
   else
     log_i "warning: assets directory not found in release package" "警告：发布包中未找到 assets 目录"
   fi
@@ -558,7 +561,6 @@ create_systemd_services() {
   fi
 
   "$bin" --config "$CONFIG_PATH" listen service install --warppool-bin "$bin"
-  "$bin" --config "$CONFIG_PATH" listen service enable
   "$bin" --config "$CONFIG_PATH" proxy service install --warppool-bin "$bin" --singbox-bin "$LIB_DIR/bin/sing-box"
 }
 
@@ -575,8 +577,7 @@ WarpPool 主服务器安装完成。
 
 后续常用命令：
   warppool deploy --name nat01 --exit-mode direct --proxy mixed --port 10133 --ssh-host <出口节点IP> --ssh-user root
-  warppool wg up nat01
-  warppool proxy service enable
+  warppool node start nat01
 
 Deploy Token 监听已完成配置，但不会自动启动。
 只在需要时启动：
@@ -597,8 +598,7 @@ Listener config:
 
 Next commands:
   warppool deploy --name nat01 --exit-mode direct --proxy mixed --port 10133 --ssh-host <exit-node-ip> --ssh-user root
-  warppool wg up nat01
-  warppool proxy service enable
+  warppool node start nat01
 
 Deploy Token listener is configured but not started automatically.
 Start it only when needed:

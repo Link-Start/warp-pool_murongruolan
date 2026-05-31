@@ -306,6 +306,41 @@ choose_registration_server() {
   fi
 }
 
+choose_wireguard_ports() {
+  if [ -z "$SERVER" ] || [ -z "$TOKEN" ]; then
+    return 0
+  fi
+  if ! is_interactive; then
+    return 0
+  fi
+
+  local input
+  while true; do
+    printf '%s' "$(text "WireGuard listen port on this node [$WG_LISTEN_PORT]: " "本节点 WireGuard 监听端口 [$WG_LISTEN_PORT]: ")" >/dev/tty
+    read -r input </dev/tty
+    input="${input:-$WG_LISTEN_PORT}"
+    if validate_port_value "$input"; then
+      WG_LISTEN_PORT="$input"
+      break
+    fi
+    printf '[WarpPool] %s\n' "$(text "invalid port, enter a number between 1 and 65535" "端口无效，请输入 1 到 65535 之间的数字")" >/dev/tty
+  done
+
+  if [ -z "$WG_ENDPOINT_PORT" ]; then
+    WG_ENDPOINT_PORT="$WG_LISTEN_PORT"
+  fi
+  while true; do
+    printf '%s' "$(text "Public WireGuard endpoint port for the main server [$WG_ENDPOINT_PORT]: " "主服务器连接本节点的 WireGuard 公网端口 [$WG_ENDPOINT_PORT]: ")" >/dev/tty
+    read -r input </dev/tty
+    input="${input:-$WG_ENDPOINT_PORT}"
+    if validate_port_value "$input"; then
+      WG_ENDPOINT_PORT="$input"
+      break
+    fi
+    printf '[WarpPool] %s\n' "$(text "invalid port, enter a number between 1 and 65535" "端口无效，请输入 1 到 65535 之间的数字")" >/dev/tty
+  done
+}
+
 validate_registration_args() {
   if [ -n "$SERVER" ] && [ -z "$TOKEN" ]; then
     fail_i "server was provided but token is missing; run warppool deploy-token on the main server, or leave server IP empty for manual setup" "已填写主服务器但缺少 token；请在主服务器执行 warppool deploy-token，或留空主服务器地址改为手动配置"
@@ -340,8 +375,8 @@ check_supported_os() {
 
   case "$OS_ID" in
     debian)
-      if [ "$major" -lt 12 ]; then
-        fail_i "unsupported Debian version: $OS_VERSION, expected Debian 12+" "不支持当前 Debian 版本：$OS_VERSION，需要 Debian 12+"
+      if [ "$major" -lt 11 ]; then
+        fail_i "unsupported Debian version: $OS_VERSION, expected Debian 11+" "不支持当前 Debian 版本：$OS_VERSION，需要 Debian 11+"
       fi
       CHILD_SCRIPT="install_debian.sh"
       ;;
@@ -478,6 +513,7 @@ main() {
   select_language
   choose_mode
   choose_registration_server
+  choose_wireguard_ports
   validate_mode
   validate_registration_args
   require_root
