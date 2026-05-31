@@ -30,6 +30,26 @@ func TestAllocatePair(t *testing.T) {
 	}
 }
 
+func TestAllocatePairSkipsPreparedDeployTokenAddresses(t *testing.T) {
+	cfg := config.Default()
+	cfg.Tokens = append(cfg.Tokens, config.DeployToken{
+		Token:    "token-1",
+		Prepared: true,
+		Node: config.Node{
+			WGServerAddress: "10.200.0.1/30",
+			WGClientAddress: "10.200.0.2/30",
+		},
+	})
+
+	server, client, err := AllocatePair(cfg, "10.200.0.0/16")
+	if err != nil {
+		t.Fatalf("allocate pair: %v", err)
+	}
+	if server != "10.200.0.5" || client != "10.200.0.6" {
+		t.Fatalf("unexpected pair: %s %s", server, client)
+	}
+}
+
 func TestBuildPlan(t *testing.T) {
 	cfg := config.Default()
 	plan, err := BuildPlan(cfg, Options{
@@ -50,6 +70,44 @@ func TestBuildPlan(t *testing.T) {
 	}
 	if !strings.Contains(plan.ClientConfig, "Endpoint = 203.0.113.1:51820") {
 		t.Fatalf("client config missing endpoint:\n%s", plan.ClientConfig)
+	}
+}
+
+func TestBuildPlanUsesSeparateEndpointPort(t *testing.T) {
+	cfg := config.Default()
+	plan, err := BuildPlan(cfg, Options{
+		Node: config.Node{
+			Name: "nat-1",
+		},
+		Endpoint:     "203.0.113.1",
+		EndpointPort: 30021,
+		ListenPort:   51820,
+	})
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+	if !strings.Contains(plan.ClientConfig, "Endpoint = 203.0.113.1:30021") {
+		t.Fatalf("client config missing mapped endpoint port:\n%s", plan.ClientConfig)
+	}
+	if !strings.Contains(plan.ServerConfig, "ListenPort = 51820") {
+		t.Fatalf("server config missing listen port:\n%s", plan.ServerConfig)
+	}
+}
+
+func TestBuildPlanKeepsExplicitHostPort(t *testing.T) {
+	cfg := config.Default()
+	plan, err := BuildPlan(cfg, Options{
+		Node: config.Node{
+			Name: "nat-1",
+		},
+		Endpoint:   "203.0.113.1:30021",
+		ListenPort: 51820,
+	})
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+	if !strings.Contains(plan.ClientConfig, "Endpoint = 203.0.113.1:30021") {
+		t.Fatalf("client config did not keep explicit endpoint:\n%s", plan.ClientConfig)
 	}
 }
 
@@ -90,5 +148,29 @@ func TestBuildPlanWithDirectForwarding(t *testing.T) {
 		if !strings.Contains(plan.ServerConfig, want) {
 			t.Fatalf("server config missing %q:\n%s", want, plan.ServerConfig)
 		}
+	}
+}
+
+func TestBuildPlanUsesProvidedKeys(t *testing.T) {
+	cfg := config.Default()
+	plan, err := BuildPlan(cfg, Options{
+		Node: config.Node{
+			Name: "nat-1",
+		},
+		Endpoint:         "203.0.113.1",
+		ServerPrivateKey: "server-private",
+		ServerPublicKey:  "server-public",
+		ClientPrivateKey: "client-private",
+		ClientPublicKey:  "client-public",
+	})
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+
+	if plan.ServerPrivateKey != "server-private" || plan.ServerPublicKey != "server-public" {
+		t.Fatalf("server keys not applied: %#v", plan)
+	}
+	if plan.ClientPrivateKey != "client-private" || plan.ClientPublicKey != "client-public" {
+		t.Fatalf("client keys not applied: %#v", plan)
 	}
 }

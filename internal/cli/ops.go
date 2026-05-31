@@ -142,7 +142,7 @@ func newShowCommand() *cobra.Command {
 			_ = cfg
 
 			payload := map[string]any{
-				"node": node,
+				"node": redactNode(node),
 			}
 			if status, err := wgclient.GetStatus(node, wgclient.Options{}); err == nil {
 				payload["wireguard_active"] = status.Active
@@ -167,20 +167,28 @@ func newShowCommand() *cobra.Command {
 	return cmd
 }
 
-func newUninstallCommand() *cobra.Command {
-	var assetsDir string
-	cmd := &cobra.Command{
-		Use:   "uninstall",
-		Short: "Print or run local uninstall helper",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			path := assetsDir + string(os.PathSeparator) + "uninstall.sh"
-			fmt.Fprintf(cmd.OutOrStdout(), "uninstall helper: %s\n", path)
-			fmt.Fprintln(cmd.OutOrStdout(), "remote uninstall is intentionally not automatic in MVP")
-			return nil
-		},
+func redactNode(node config.Node) config.Node {
+	if node.WGClientPrivateKey != "" {
+		node.WGClientPrivateKey = "<redacted>"
 	}
-	cmd.Flags().StringVar(&assetsDir, "assets-dir", "assets", "assets directory")
-	return cmd
+	if node.WGClientConfig != "" {
+		node.WGClientConfig = redactWireGuardConfig(node.WGClientConfig)
+	}
+	return node
+}
+
+func redactWireGuardConfig(value string) string {
+	lines := strings.Split(value, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "PrivateKey") {
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				lines[i] = strings.TrimRight(parts[0], " ") + " = <redacted>"
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func newUpgradeCommand() *cobra.Command {
@@ -221,21 +229,26 @@ func BuildDoctorChecks(cfg config.Config, cfgPath string) []DoctorCheck {
 	}
 	sb := singbox.ResolveBinary("", runtime.GOOS)
 	checks = append(checks, DoctorCheck{Name: "sing-box", OK: binaryRunnable(sb, "version"), Detail: sb})
+	proxyStatus, proxyErr := singbox.Status(singbox.ManagerOptions{})
+	proxyRunning := proxyErr == nil && proxyStatus.Running
 
 	for _, node := range cfg.Nodes {
 		_, err := net.Listen("tcp", net.JoinHostPort(node.BindHost, fmt.Sprintf("%d", node.LocalPort)))
 		if err != nil {
+			if proxyRunning {
+				checks = append(checks, DoctorCheck{Name: "port " + node.Name, OK: true, Detail: fmt.Sprintf("%s:%d in use by local proxy", node.BindHost, node.LocalPort)})
+				continue
+			}
 			checks = append(checks, DoctorCheck{Name: "port " + node.Name, OK: false, Detail: err.Error()})
 			continue
 		}
 		checks = append(checks, DoctorCheck{Name: "port " + node.Name, OK: true, Detail: fmt.Sprintf("%s:%d", node.BindHost, node.LocalPort)})
 	}
 
-	status, err := singbox.Status(singbox.ManagerOptions{})
-	if err != nil {
-		checks = append(checks, DoctorCheck{Name: "proxy", OK: false, Detail: err.Error()})
+	if proxyErr != nil {
+		checks = append(checks, DoctorCheck{Name: "proxy", OK: false, Detail: proxyErr.Error()})
 	} else {
-		checks = append(checks, DoctorCheck{Name: "proxy", OK: status.Running, Detail: status.Message})
+		checks = append(checks, DoctorCheck{Name: "proxy", OK: proxyStatus.Running, Detail: proxyStatus.Message})
 	}
 	return checks
 }

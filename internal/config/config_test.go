@@ -226,6 +226,125 @@ func TestDeployTokenRejectsExpired(t *testing.T) {
 	}
 }
 
+func TestPrepareAndCompleteDeployToken(t *testing.T) {
+	cfg := Default()
+	cfg, err := AddDeployToken(cfg, DeployToken{
+		Token:     "token-1",
+		ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		Node: Node{
+			Name:      "nat1",
+			ExitMode:  ExitModeDirect,
+			Proxy:     ProxyMixed,
+			BindHost:  "127.0.0.1",
+			LocalPort: 10013,
+		},
+	})
+	if err != nil {
+		t.Fatalf("add token: %v", err)
+	}
+
+	prepared := cfg.Tokens[0].Node
+	prepared.WGDevice = "wpnat1"
+	prepared.WGClientConfig = "client"
+	cfg, err = PrepareDeployToken(cfg, "token-1", prepared, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("prepare token: %v", err)
+	}
+	if !cfg.Tokens[0].Prepared {
+		t.Fatal("expected token prepared")
+	}
+
+	next, node, err := CompleteDeployToken(cfg, "token-1", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("complete token: %v", err)
+	}
+	if node.WGDevice != "wpnat1" {
+		t.Fatalf("unexpected node: %#v", node)
+	}
+	if len(next.Nodes) != 1 || !next.Tokens[0].Used || !next.Tokens[0].Registered {
+		t.Fatalf("unexpected completed config: %#v", next)
+	}
+}
+
+func TestRemoveDeployTokens(t *testing.T) {
+	cfg := Default()
+	expiresAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	cfg, err := AddDeployToken(cfg, DeployToken{
+		Token:     "token-1",
+		ExpiresAt: expiresAt,
+		Node: Node{
+			Name:      "nat1",
+			ExitMode:  ExitModeDirect,
+			Proxy:     ProxyMixed,
+			BindHost:  "127.0.0.1",
+			LocalPort: 10013,
+		},
+	})
+	if err != nil {
+		t.Fatalf("add token: %v", err)
+	}
+	cfg, err = AddDeployToken(cfg, DeployToken{
+		Token:     "token-2",
+		ExpiresAt: expiresAt,
+		Node: Node{
+			Name:      "nat2",
+			ExitMode:  ExitModeDirect,
+			Proxy:     ProxyMixed,
+			BindHost:  "127.0.0.1",
+			LocalPort: 10014,
+		},
+	})
+	if err != nil {
+		t.Fatalf("add token: %v", err)
+	}
+	cfg.Tokens[1].Used = true
+
+	next, removed := RemoveDeployTokens(cfg, "nat1", false)
+	if removed != 1 || len(next.Tokens) != 1 || next.Tokens[0].Token != "token-2" {
+		t.Fatalf("unexpected remove result: removed=%d tokens=%#v", removed, next.Tokens)
+	}
+
+	next, removed = RemoveDeployTokens(next, "token-2", false)
+	if removed != 0 || len(next.Tokens) != 1 {
+		t.Fatalf("used token should be kept without includeUsed: removed=%d tokens=%#v", removed, next.Tokens)
+	}
+
+	next, removed = RemoveDeployTokens(next, "token-2", true)
+	if removed != 1 || len(next.Tokens) != 0 {
+		t.Fatalf("used token should be removed with includeUsed: removed=%d tokens=%#v", removed, next.Tokens)
+	}
+}
+
+func TestPruneExpiredDeployTokens(t *testing.T) {
+	cfg := Default()
+	cfg.Tokens = []DeployToken{
+		{
+			Token:     "expired",
+			ExpiresAt: time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
+			Node:      Node{Name: "old"},
+		},
+		{
+			Token:     "used-expired",
+			ExpiresAt: time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
+			Used:      true,
+			Node:      Node{Name: "used"},
+		},
+		{
+			Token:     "active",
+			ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+			Node:      Node{Name: "active"},
+		},
+	}
+
+	next, removed := PruneExpiredDeployTokens(cfg, time.Now().UTC())
+	if removed != 1 || len(next.Tokens) != 2 {
+		t.Fatalf("unexpected prune result: removed=%d tokens=%#v", removed, next.Tokens)
+	}
+	if next.Tokens[0].Token != "used-expired" || next.Tokens[1].Token != "active" {
+		t.Fatalf("unexpected remaining tokens: %#v", next.Tokens)
+	}
+}
+
 func TestLoadRejectsOpenPermissionsOnUnix(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("windows permissions differ")

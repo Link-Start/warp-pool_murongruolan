@@ -29,6 +29,7 @@ type PushOptions struct {
 	RemoteDir      string
 	AssetsDir      string
 	WGEndpoint     string
+	WGEndpointPort int
 	WGListenPort   int
 	SkipWGUp       bool
 	SkipForwarding bool
@@ -60,6 +61,9 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	if opts.WGEndpoint == "" {
 		opts.WGEndpoint = opts.SSH.Host
 	}
+	if opts.WGEndpointPort == 0 {
+		opts.WGEndpointPort = opts.WGListenPort
+	}
 	if opts.Node.PublicIP == "" {
 		opts.Node.PublicIP = opts.SSH.Host
 	}
@@ -77,6 +81,7 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	wgOptions := wireguard.Options{
 		Node:             opts.Node,
 		Endpoint:         opts.WGEndpoint,
+		EndpointPort:     opts.WGEndpointPort,
 		ListenPort:       opts.WGListenPort,
 		EnableForwarding: opts.Node.ExitMode == config.ExitModeDirect && !opts.SkipForwarding,
 	}
@@ -232,6 +237,9 @@ func configureRemoteWireGuard(client *sshclient.Client, plan wireguard.Plan, rem
 	if _, err := client.Run("mkdir -p /etc/wireguard"); err != nil {
 		return err
 	}
+	if err := installRemoteNodeUninstaller(client, remoteDir, result); err != nil {
+		return err
+	}
 	if err := runWireGuardPreflight(client, plan, remoteDir, result); err != nil {
 		return err
 	}
@@ -273,6 +281,31 @@ func configureRemoteWireGuard(client *sshclient.Client, plan wireguard.Plan, rem
 
 	result.Logs = append(result.Logs, "WireGuard started: "+plan.Device)
 	return nil
+}
+
+func installRemoteNodeUninstaller(client *sshclient.Client, remoteDir string, result *PushResult) error {
+	command := installRemoteNodeUninstallerCommand(remoteDir)
+	remoteResult, err := client.Run(command)
+	if remoteResult.Stdout != "" {
+		result.Logs = append(result.Logs, remoteResult.Stdout)
+	}
+	if remoteResult.Stderr != "" {
+		result.Logs = append(result.Logs, remoteResult.Stderr)
+	}
+	if err != nil {
+		return fmt.Errorf("install remote node uninstaller: %w", err)
+	}
+	result.Logs = append(result.Logs, "installed remote node uninstaller: /usr/local/bin/warppool-node-uninstall")
+	return nil
+}
+
+func installRemoteNodeUninstallerCommand(remoteDir string) string {
+	scriptPath := filepath.ToSlash(filepath.Join(remoteDir, "node_uninstall.sh"))
+	return fmt.Sprintf(
+		"if [ -x %s ]; then cp %s /usr/local/bin/warppool-node-uninstall && chmod 0755 /usr/local/bin/warppool-node-uninstall; else echo '[WarpPool][node-uninstall][WARN] node_uninstall.sh not found in deploy assets' >&2; fi",
+		shellPath(scriptPath),
+		shellPath(scriptPath),
+	)
 }
 
 func runWireGuardPreflight(client *sshclient.Client, plan wireguard.Plan, remoteDir string, result *PushResult) error {

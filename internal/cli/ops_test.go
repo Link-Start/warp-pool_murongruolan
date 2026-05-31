@@ -28,6 +28,28 @@ func TestBuildDoctorChecksIncludesNodePort(t *testing.T) {
 	}
 }
 
+func TestValidateLocalProxyPortRejectsReservedPort(t *testing.T) {
+	cfg := config.Default()
+	cfg.Nodes = append(cfg.Nodes, config.Node{Name: "nat1", BindHost: "127.0.0.1", LocalPort: 10133})
+	if err := validateLocalProxyPort(cfg, "127.0.0.1", 10133); err == nil {
+		t.Fatal("expected reserved port error")
+	}
+}
+
+func TestRedactNodeHidesPrivateKey(t *testing.T) {
+	node := config.Node{
+		WGClientPrivateKey: "private-key",
+		WGClientConfig:     "PrivateKey = private-key\nAddress = 10.0.0.2/30\n",
+	}
+	redacted := redactNode(node)
+	if redacted.WGClientPrivateKey != "<redacted>" {
+		t.Fatalf("private key not redacted: %#v", redacted)
+	}
+	if redacted.WGClientConfig == node.WGClientConfig || redacted.WGClientConfig == "" {
+		t.Fatalf("client config not redacted: %q", redacted.WGClientConfig)
+	}
+}
+
 func hasDoctorCheck(checks []DoctorCheck, name string) bool {
 	for _, check := range checks {
 		if check.Name == name {
