@@ -1,0 +1,309 @@
+package cli
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/murongruolan/warp-pool/internal/config"
+	"github.com/murongruolan/warp-pool/internal/singbox"
+	"github.com/murongruolan/warp-pool/internal/wgclient"
+	"github.com/spf13/cobra"
+)
+
+func newVersionCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "version",
+		Short: "Show WarpPool version",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Fprintf(cmd.OutOrStdout(), "version: %s\ncommit: %s\nbuilt: %s\n", version, commit, date)
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newDoctorCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Check local WarpPool runtime prerequisites",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load(resolvedConfigPath())
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+
+			checks := BuildDoctorChecks(cfg, resolvedConfigPath())
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "CHECK\tSTATUS\tDETAIL")
+			for _, check := range checks {
+				printCheck(w, check.Name, check.OK, check.Detail)
+			}
+			return w.Flush()
+		},
+	}
+	return cmd
+}
+
+func newPingCommand() *cobra.Command {
+	var count int
+	var timeout time.Duration
+
+	cmd := &cobra.Command{
+		Use:   "ping [node]",
+		Short: "Ping WireGuard peer addresses",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load(resolvedConfigPath())
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			nodes := cfg.Nodes
+			if len(args) == 1 {
+				node, ok := config.FindNode(cfg, args[0])
+				if !ok {
+					return fmt.Errorf("node not found: %s", args[0])
+				}
+				nodes = []config.Node{node}
+			}
+			if len(nodes) == 0 {
+				return fmt.Errorf("no nodes configured")
+			}
+
+			for _, node := range nodes {
+				target := hostOnly(node.WGServerAddress)
+				if target == "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "%s: missing wg_server_address\n", node.Name)
+					continue
+				}
+				out, err := runPing(target, count, timeout)
+				fmt.Fprintf(cmd.OutOrStdout(), "== %s (%s) ==\n", node.Name, target)
+				if strings.TrimSpace(out) != "" {
+					fmt.Fprintln(cmd.OutOrStdout(), strings.TrimSpace(out))
+				}
+				if err != nil {
+					fmt.Fprintf(cmd.OutOrStdout(), "ping failed: %v\n", err)
+				}
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().IntVarP(&count, "count", "c", 3, "ping count")
+	cmd.Flags().DurationVar(&timeout, "timeout", 2*time.Second, "per-packet timeout")
+	return cmd
+}
+
+func newSpeedtestCommand() *cobra.Command {
+	var proxy string
+	var url string
+	var timeout time.Duration
+
+	cmd := &cobra.Command{
+		Use:   "speedtest",
+		Short: "Run a lightweight HTTP download speed test",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			start := time.Now()
+			n, err := timedDownload(url, proxy, timeout)
+			elapsed := time.Since(start)
+			if err != nil {
+				return err
+			}
+			mbps := float64(n*8) / elapsed.Seconds() / 1000 / 1000
+			fmt.Fprintf(cmd.OutOrStdout(), "downloaded: %d bytes\nelapsed: %s\nspeed: %.2f Mbps\n", n, elapsed.Round(time.Millisecond), mbps)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&proxy, "proxy", "", "proxy URL, for example socks5h://127.0.0.1:10134")
+	cmd.Flags().StringVar(&url, "url", "https://speed.cloudflare.com/__down?bytes=1000000", "download URL")
+	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Second, "HTTP timeout")
+	return cmd
+}
+
+func newShowCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "show <node>",
+		Short: "Show node details with local runtime status",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, node, err := loadConfigAndNode(resolvedConfigPath(), args[0])
+			if err != nil {
+				return err
+			}
+			_ = cfg
+
+			payload := map[string]any{
+				"node": node,
+			}
+			if status, err := wgclient.GetStatus(node, wgclient.Options{}); err == nil {
+				payload["wireguard_active"] = status.Active
+				payload["wireguard_status"] = status.Output
+			} else {
+				payload["wireguard_error"] = err.Error()
+			}
+			if status, err := singbox.Status(singbox.ManagerOptions{}); err == nil {
+				payload["proxy_running"] = status.Running
+				payload["proxy_status"] = status.Message
+			} else {
+				payload["proxy_error"] = err.Error()
+			}
+			data, err := json.MarshalIndent(payload, "", "  ")
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), string(data))
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newUninstallCommand() *cobra.Command {
+	var assetsDir string
+	cmd := &cobra.Command{
+		Use:   "uninstall",
+		Short: "Print or run local uninstall helper",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := assetsDir + string(os.PathSeparator) + "uninstall.sh"
+			fmt.Fprintf(cmd.OutOrStdout(), "uninstall helper: %s\n", path)
+			fmt.Fprintln(cmd.OutOrStdout(), "remote uninstall is intentionally not automatic in MVP")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&assetsDir, "assets-dir", "assets", "assets directory")
+	return cmd
+}
+
+func newUpgradeCommand() *cobra.Command {
+	var assetsDir string
+	cmd := &cobra.Command{
+		Use:   "upgrade",
+		Short: "Print or run local upgrade helper",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := assetsDir + string(os.PathSeparator) + "upgrade.sh"
+			fmt.Fprintf(cmd.OutOrStdout(), "upgrade helper: %s\n", path)
+			fmt.Fprintln(cmd.OutOrStdout(), "binary release upgrade flow will be finalized in release stage")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&assetsDir, "assets-dir", "assets", "assets directory")
+	return cmd
+}
+
+func printCheck(w *tabwriter.Writer, name string, ok bool, detail string) {
+	status := "FAIL"
+	if ok {
+		status = "OK"
+	}
+	fmt.Fprintf(w, "%s\t%s\t%s\n", name, status, detail)
+}
+
+type DoctorCheck struct {
+	Name   string
+	OK     bool
+	Detail string
+}
+
+func BuildDoctorChecks(cfg config.Config, cfgPath string) []DoctorCheck {
+	checks := []DoctorCheck{
+		{Name: "config", OK: true, Detail: cfgPath},
+		{Name: "wireguard", OK: commandExists("wg"), Detail: pathOrMissing("wg")},
+		{Name: "wg-quick", OK: runtime.GOOS == "windows" || commandExists("wg-quick"), Detail: pathOrMissing("wg-quick")},
+	}
+	sb := singbox.ResolveBinary("", runtime.GOOS)
+	checks = append(checks, DoctorCheck{Name: "sing-box", OK: binaryRunnable(sb, "version"), Detail: sb})
+
+	for _, node := range cfg.Nodes {
+		_, err := net.Listen("tcp", net.JoinHostPort(node.BindHost, fmt.Sprintf("%d", node.LocalPort)))
+		if err != nil {
+			checks = append(checks, DoctorCheck{Name: "port " + node.Name, OK: false, Detail: err.Error()})
+			continue
+		}
+		checks = append(checks, DoctorCheck{Name: "port " + node.Name, OK: true, Detail: fmt.Sprintf("%s:%d", node.BindHost, node.LocalPort)})
+	}
+
+	status, err := singbox.Status(singbox.ManagerOptions{})
+	if err != nil {
+		checks = append(checks, DoctorCheck{Name: "proxy", OK: false, Detail: err.Error()})
+	} else {
+		checks = append(checks, DoctorCheck{Name: "proxy", OK: status.Running, Detail: status.Message})
+	}
+	return checks
+}
+
+func commandExists(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+func pathOrMissing(name string) string {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return "not found"
+	}
+	return path
+}
+
+func binaryRunnable(name string, args ...string) bool {
+	cmd := exec.Command(name, args...)
+	return cmd.Run() == nil
+}
+
+func hostOnly(cidr string) string {
+	if cidr == "" {
+		return ""
+	}
+	return strings.Split(cidr, "/")[0]
+}
+
+func runPing(target string, count int, timeout time.Duration) (string, error) {
+	if count < 1 {
+		count = 1
+	}
+	if runtime.GOOS == "windows" {
+		out, err := exec.Command("ping", "-n", fmt.Sprintf("%d", count), "-w", fmt.Sprintf("%d", timeout.Milliseconds()), target).CombinedOutput()
+		return string(out), err
+	}
+	seconds := int(timeout.Seconds())
+	if seconds < 1 {
+		seconds = 1
+	}
+	out, err := exec.Command("ping", "-c", fmt.Sprintf("%d", count), "-W", fmt.Sprintf("%d", seconds), target).CombinedOutput()
+	return string(out), err
+}
+
+func timedDownload(rawURL string, proxyURL string, timeout time.Duration) (int64, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if proxyURL != "" {
+		parsedProxy, err := url.Parse(proxyURL)
+		if err != nil {
+			return 0, fmt.Errorf("parse proxy URL: %w", err)
+		}
+		transport.Proxy = func(*http.Request) (*url.URL, error) {
+			return parsedProxy, nil
+		}
+	}
+	client := &http.Client{Transport: transport, Timeout: timeout}
+	resp, err := client.Get(rawURL)
+	if err != nil {
+		return 0, fmt.Errorf("download speedtest URL: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("speedtest HTTP status: %s", resp.Status)
+	}
+	n, err := io.Copy(io.Discard, resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("read speedtest body: %w", err)
+	}
+	return n, nil
+}

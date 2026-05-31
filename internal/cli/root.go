@@ -6,6 +6,12 @@ import (
 
 var configPath string
 
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
 func Execute() error {
 	root := NewRootCommand()
 	return root.Execute()
@@ -22,10 +28,17 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newConfigCommand())
 	root.AddCommand(newDeployCommand())
 	root.AddCommand(newDeployTokenCommand())
+	root.AddCommand(newDoctorCommand())
 	root.AddCommand(newExportCommand())
 	root.AddCommand(newListenCommand())
 	root.AddCommand(newNodeCommand())
+	root.AddCommand(newPingCommand())
 	root.AddCommand(newProxyCommand())
+	root.AddCommand(newShowCommand())
+	root.AddCommand(newSpeedtestCommand())
+	root.AddCommand(newUninstallCommand())
+	root.AddCommand(newUpgradeCommand())
+	root.AddCommand(newVersionCommand())
 	root.AddCommand(newWGCommand())
 
 	return root
