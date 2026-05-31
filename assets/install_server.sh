@@ -401,6 +401,7 @@ create_systemd_services() {
   local bin="$INSTALL_DIR/warppool"
   if [ "$DRY_RUN" = "true" ]; then
     log "dry-run: create systemd service for Deploy Token listener"
+    log "dry-run: create systemd service for local proxy"
     return 0
   fi
   if [ "$OS_ID" = "alpine" ]; then
@@ -414,6 +415,7 @@ create_systemd_services() {
 
   "$bin" --config "$CONFIG_PATH" listen service install --warppool-bin "$bin"
   "$bin" --config "$CONFIG_PATH" listen service enable
+  "$bin" --config "$CONFIG_PATH" proxy service install --warppool-bin "$bin" --singbox-bin "$LIB_DIR/bin/sing-box"
 }
 
 print_next_steps() {
@@ -429,7 +431,7 @@ Listener config:
 Next commands:
   warppool deploy --name nat01 --exit-mode direct --proxy mixed --port 10133 --ssh-host <exit-node-ip> --ssh-user root
   warppool wg up nat01
-  warppool proxy start
+  warppool proxy service enable
 
 Deploy Token listener is configured but not started automatically.
 Start it only when needed:

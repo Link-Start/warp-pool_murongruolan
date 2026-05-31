@@ -138,7 +138,7 @@ func promptDeployOptions(prompt promptIO, cfg config.Config, opts *deploy.PushOp
 	if err != nil {
 		return err
 	}
-	opts.WGEndpoint, err = prompt.askOptionalString("WireGuard public endpoint host/IP, Enter uses SSH host/IP", opts.WGEndpoint)
+	opts.WGEndpoint, err = prompt.askString("WireGuard public endpoint host/IP", opts.WGEndpoint, opts.SSH.Host)
 	if err != nil {
 		return err
 	}

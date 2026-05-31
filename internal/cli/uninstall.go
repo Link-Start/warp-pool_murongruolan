@@ -17,24 +17,30 @@ import (
 )
 
 type uninstallOptions struct {
-	All         bool
-	KeepConfig  bool
-	KeepBinary  bool
-	DryRun      bool
-	Force       bool
-	BinaryPath  string
-	ConfigPath  string
-	StateDir    string
-	InstallDir  string
-	ListenUnit  string
-	SingBoxUnit string
-	RuntimeOS   string
-	Runner      uninstallRunner
-	RemoveFile  func(string) error
-	RemoveAll   func(string) error
-	Stat        func(string) (fs.FileInfo, error)
-	Executable  func() (string, error)
-	Out         func(string)
+	KeepConfig      bool
+	KeepBinary      bool
+	DryRun          bool
+	Force           bool
+	CleanWG         bool
+	CleanProxy      bool
+	CleanWGSet      bool
+	CleanProxySet   bool
+	BinaryPath      string
+	ConfigPath      string
+	StateDir        string
+	InstallDir      string
+	ListenUnit      string
+	ProxyUnit       string
+	SingBoxUnit     string
+	RuntimeOS       string
+	Runner          uninstallRunner
+	RemoveFile      func(string) error
+	RemoveAll       func(string) error
+	Stat            func(string) (fs.FileInfo, error)
+	Executable      func() (string, error)
+	Out             func(string)
+	Prompt          promptIO
+	SkipInteractive bool
 }
 
 type uninstallRunner interface {
@@ -54,25 +60,18 @@ type uninstallResult struct {
 func newUninstallCommand() *cobra.Command {
 	var opts uninstallOptions
 	cmd := &cobra.Command{
-		Use:   "uninstall [node]",
-		Short: "Uninstall WarpPool local runtime or remove one node runtime",
+		Use:   "uninstall",
+		Short: "Uninstall WarpPool from the main server",
 		Long: "Uninstall WarpPool local runtime.\n\n" +
-			"Without a node name, the command cleans local proxy, Deploy Token listener service, local WireGuard clients, runtime files, and optionally the binary/config.\n" +
-			"With a node name, only that node's local WireGuard client runtime and config record are removed.",
+			"Use `warppool node remove <name>` or `warppool remove <name>` to remove a node record.\n" +
+			"`uninstall` is only for removing the main server program and local runtime files.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) > 1 {
-				return fmt.Errorf("expected zero or one node name")
+			if len(args) != 0 {
+				return fmt.Errorf("uninstall does not remove nodes; use `warppool remove %s` or `warppool node remove %s`", args[0], args[0])
 			}
 			opts.ConfigPath = resolvedConfigPath()
 			opts.Out = func(line string) { fmt.Fprintln(cmd.OutOrStdout(), line) }
-
-			if len(args) == 1 {
-				result, err := uninstallNode(args[0], opts)
-				for _, log := range result.Logs {
-					fmt.Fprintln(cmd.OutOrStdout(), log)
-				}
-				return err
-			}
+			opts.Prompt = newPromptIO(cmd.OutOrStdout())
 
 			if !opts.Force && !opts.DryRun {
 				return fmt.Errorf("refusing to uninstall without --force; use --dry-run to preview")
@@ -86,74 +85,50 @@ func newUninstallCommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVar(&opts.All, "all", true, "uninstall all local WarpPool runtime")
 	cmd.Flags().BoolVar(&opts.KeepConfig, "keep-config", false, "keep config file")
 	cmd.Flags().BoolVar(&opts.KeepBinary, "keep-binary", false, "keep warppool binary")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "print actions without changing files or services")
 	cmd.Flags().BoolVar(&opts.Force, "force", false, "confirm destructive uninstall")
+	cmd.Flags().BoolVar(&opts.CleanWG, "clean-wg", false, "also stop and remove local WireGuard client configs")
+	cmd.Flags().BoolVar(&opts.CleanProxy, "clean-proxy", false, "also stop and remove local proxy/listener services and runtime state")
 	cmd.Flags().StringVar(&opts.BinaryPath, "binary", "", "warppool binary path")
 	cmd.Flags().StringVar(&opts.StateDir, "state-dir", "", "WarpPool runtime state directory")
 	cmd.Flags().StringVar(&opts.InstallDir, "install-dir", "", "WarpPool installation directory")
 	cmd.Flags().StringVar(&opts.ListenUnit, "listen-unit", "", "Deploy Token listener systemd unit path")
+	cmd.Flags().StringVar(&opts.ProxyUnit, "proxy-unit", "", "local proxy systemd unit path")
 	cmd.Flags().StringVar(&opts.SingBoxUnit, "singbox-unit", "", "sing-box systemd unit path")
+	cmd.PreRun = func(cmd *cobra.Command, args []string) {
+		opts.CleanWGSet = cmd.Flags().Changed("clean-wg")
+		opts.CleanProxySet = cmd.Flags().Changed("clean-proxy")
+	}
 	return cmd
-}
-
-func uninstallNode(name string, opts uninstallOptions) (uninstallResult, error) {
-	opts = uninstallDefaults(opts)
-	result := uninstallResult{}
-
-	cfg, err := config.Load(opts.ConfigPath)
-	if err != nil {
-		return result, fmt.Errorf("load config: %w", err)
-	}
-	node, ok := config.FindNode(cfg, name)
-	if !ok {
-		return result, fmt.Errorf("node not found: %s", name)
-	}
-
-	result.append("stopping local WireGuard client for node: " + name)
-	if err := wgDownBestEffort(node, opts, &result); err != nil {
-		return result, err
-	}
-
-	device := node.WGLocalDevice
-	if device == "" {
-		device = wgclient.DefaultLocalDeviceName(node.Name)
-	}
-	if opts.RuntimeOS == "linux" {
-		_ = runBestEffort(opts, &result, "systemctl", "disable", "wg-quick@"+device)
-	}
-
-	if node.WGLocalConfigPath != "" {
-		if err := removePath(opts, node.WGLocalConfigPath, &result, false); err != nil {
-			return result, err
-		}
-	}
-
-	next, removed, err := config.RemoveNode(cfg, name)
-	if err != nil {
-		return result, err
-	}
-	if !opts.DryRun {
-		if err := config.SaveExisting(opts.ConfigPath, next); err != nil {
-			return result, fmt.Errorf("save config: %w", err)
-		}
-	}
-	result.append("removed node record: " + removed.Name)
-	return result, nil
 }
 
 func uninstallAll(opts uninstallOptions) (uninstallResult, error) {
 	opts = uninstallDefaults(opts)
 	result := uninstallResult{}
 
+	if !opts.CleanWGSet {
+		cleanWG, err := opts.Prompt.askBool("Remove local WireGuard client configs and disable wg-quick services?", false, true)
+		if err != nil {
+			return result, err
+		}
+		opts.CleanWG = cleanWG
+	}
+	if !opts.CleanProxySet {
+		cleanProxy, err := opts.Prompt.askBool("Remove local proxy/listener services and runtime state?", false, true)
+		if err != nil {
+			return result, err
+		}
+		opts.CleanProxy = cleanProxy
+	}
+
 	cfg, err := config.Load(opts.ConfigPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return result, fmt.Errorf("load config: %w", err)
 	}
 
-	if cfg.Version != 0 {
+	if opts.CleanWG && cfg.Version != 0 {
 		for _, node := range cfg.Nodes {
 			if err := wgDownBestEffort(node, opts, &result); err != nil {
 				return result, err
@@ -173,29 +148,37 @@ func uninstallAll(opts uninstallOptions) (uninstallResult, error) {
 		}
 	}
 
-	if opts.DryRun {
-		result.append("dry-run: stop sing-box")
-	} else if status, stopErr := singbox.Stop(singbox.ManagerOptions{}); stopErr == nil {
-		result.append(status.Message)
-	} else {
-		result.append("skip sing-box stop: " + stopErr.Error())
-	}
+	if opts.CleanProxy {
+		if opts.RuntimeOS == "linux" {
+			_ = runBestEffort(opts, &result, "systemctl", "disable", "--now", "warppool-proxy.service")
+			if err := removePath(opts, opts.ProxyUnit, &result, false); err != nil {
+				return result, err
+			}
+		}
+		if opts.DryRun {
+			result.append("dry-run: stop sing-box")
+		} else if status, stopErr := singbox.Stop(singbox.ManagerOptions{}); stopErr == nil {
+			result.append(status.Message)
+		} else {
+			result.append("skip sing-box stop: " + stopErr.Error())
+		}
 
-	if opts.RuntimeOS == "linux" {
-		_ = runBestEffort(opts, &result, "systemctl", "disable", "--now", "warppool-listen.service")
-		_ = runBestEffort(opts, &result, "systemctl", "disable", "--now", "warppool-singbox.service")
-		if err := removePath(opts, opts.ListenUnit, &result, false); err != nil {
+		if opts.RuntimeOS == "linux" {
+			_ = runBestEffort(opts, &result, "systemctl", "disable", "--now", "warppool-listen.service")
+			if err := removePath(opts, opts.ListenUnit, &result, false); err != nil {
+				return result, err
+			}
+			if err := removePath(opts, opts.SingBoxUnit, &result, false); err != nil {
+				return result, err
+			}
+			_ = runBestEffort(opts, &result, "systemctl", "daemon-reload")
+		}
+
+		if err := removePath(opts, opts.StateDir, &result, true); err != nil {
 			return result, err
 		}
-		if err := removePath(opts, opts.SingBoxUnit, &result, false); err != nil {
-			return result, err
-		}
-		_ = runBestEffort(opts, &result, "systemctl", "daemon-reload")
 	}
 
-	if err := removePath(opts, opts.StateDir, &result, true); err != nil {
-		return result, err
-	}
 	if err := removePath(opts, opts.InstallDir, &result, true); err != nil {
 		return result, err
 	}
@@ -298,6 +281,19 @@ func uninstallDefaults(opts uninstallOptions) uninstallOptions {
 	if opts.ConfigPath == "" {
 		opts.ConfigPath = resolvedConfigPath()
 	}
+	if opts.Prompt.in == nil || opts.Prompt.out == nil {
+		opts.Prompt = newPromptIO(os.Stdout)
+	}
+	if opts.SkipInteractive || opts.DryRun {
+		if !opts.CleanWGSet {
+			opts.CleanWG = true
+			opts.CleanWGSet = true
+		}
+		if !opts.CleanProxySet {
+			opts.CleanProxy = true
+			opts.CleanProxySet = true
+		}
+	}
 	if opts.StateDir == "" {
 		opts.StateDir = defaultUninstallStateDir(opts.RuntimeOS)
 	}
@@ -307,8 +303,11 @@ func uninstallDefaults(opts uninstallOptions) uninstallOptions {
 	if opts.ListenUnit == "" {
 		opts.ListenUnit = "/etc/systemd/system/warppool-listen.service"
 	}
+	if opts.ProxyUnit == "" {
+		opts.ProxyUnit = "/etc/systemd/system/warppool-proxy.service"
+	}
 	if opts.SingBoxUnit == "" {
-		opts.SingBoxUnit = "/etc/systemd/system/warppool-singbox.service"
+		opts.SingBoxUnit = ""
 	}
 	if opts.BinaryPath == "" {
 		if exe, err := opts.Executable(); err == nil {

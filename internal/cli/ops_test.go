@@ -36,6 +36,20 @@ func TestValidateLocalProxyPortRejectsReservedPort(t *testing.T) {
 	}
 }
 
+func TestRedactNodeHidesPrivateKey(t *testing.T) {
+	node := config.Node{
+		WGClientPrivateKey: "private-key",
+		WGClientConfig:     "PrivateKey = private-key\nAddress = 10.0.0.2/30\n",
+	}
+	redacted := redactNode(node)
+	if redacted.WGClientPrivateKey != "<redacted>" {
+		t.Fatalf("private key not redacted: %#v", redacted)
+	}
+	if redacted.WGClientConfig == node.WGClientConfig || redacted.WGClientConfig == "" {
+		t.Fatalf("client config not redacted: %q", redacted.WGClientConfig)
+	}
+}
+
 func hasDoctorCheck(checks []DoctorCheck, name string) bool {
 	for _, check := range checks {
 		if check.Name == name {

@@ -53,11 +53,24 @@ parse_args() {
 install_packages() {
   log "installing WireGuard and base tools"
   run env DEBIAN_FRONTEND=noninteractive apt-get update
-  run env DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard wireguard-tools iproute2 iptables curl ca-certificates gnupg python3
+  run env DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard wireguard-tools iproute2 iptables curl ca-certificates gnupg coreutils
 }
 
 configure_wireguard_placeholder() {
   log "WireGuard package installed; config generation will be handled by WarpPool deploy flow"
+}
+
+install_node_uninstaller() {
+  local dir script
+  dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+  script="$dir/node_uninstall.sh"
+  if [ ! -r "$script" ]; then
+    log "warning: node uninstaller not found: $script"
+    return 0
+  fi
+  run cp "$script" /usr/local/bin/warppool-node-uninstall
+  run chmod 0755 /usr/local/bin/warppool-node-uninstall
+  log "installed node uninstaller: /usr/local/bin/warppool-node-uninstall"
 }
 
 maybe_install_warp() {
@@ -101,24 +114,41 @@ prepare_endpoint_port() {
   fi
 }
 
-json_get_string() {
-  local key="$1"
-  python3 -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1],""))' "$key"
+decode_b64() {
+  if base64 --help 2>&1 | grep -q -- '-d'; then
+    base64 -d
+    return $?
+  fi
+  base64 -D
 }
 
-json_get_node_string() {
-  local key="$1"
-  python3 -c 'import json,sys; print(json.load(sys.stdin).get("node",{}).get(sys.argv[1],""))' "$key"
+load_prepare_response() {
+  local response="$1"
+  OK=""
+  MESSAGE_B64=""
+  WG_DEVICE_B64=""
+  WG_SERVER_ADDR_B64=""
+  WG_CLIENT_ADDR_B64=""
+  SERVER_CONFIG_B64=""
+  eval "$response"
+  if [ "$OK" != "1" ]; then
+    fail "register prepare failed: $(printf '%s' "$MESSAGE_B64" | decode_b64)"
+  fi
+  SERVER_CONFIG="$(printf '%s' "$SERVER_CONFIG_B64" | decode_b64)"
+  WG_DEVICE="$(printf '%s' "$WG_DEVICE_B64" | decode_b64)"
+  WG_SERVER_ADDR="$(printf '%s' "$WG_SERVER_ADDR_B64" | decode_b64)"
+  WG_CLIENT_ADDR="$(printf '%s' "$WG_CLIENT_ADDR_B64" | decode_b64)"
 }
 
 write_remote_config() {
   local response="$1"
-  SERVER_CONFIG="$(printf '%s' "$response" | json_get_string server_config)"
-  WG_DEVICE="$(printf '%s' "$response" | json_get_node_string wg_device)"
-  WG_SERVER_ADDR="$(printf '%s' "$response" | json_get_node_string wg_server_address)"
-  WG_CLIENT_ADDR="$(printf '%s' "$response" | json_get_node_string wg_client_address)"
+  load_prepare_response "$response"
   [ -n "$SERVER_CONFIG" ] || fail "register prepare response missing server_config"
   [ -n "$WG_DEVICE" ] || fail "register prepare response missing node.wg_device"
+
+  if [ "$MODE" = "direct" ]; then
+    SERVER_CONFIG="$(append_direct_forwarding_hooks "$SERVER_CONFIG")"
+  fi
 
   run mkdir -p /etc/wireguard
   if [ "$DRY_RUN" = "true" ]; then
@@ -127,6 +157,34 @@ write_remote_config() {
     printf '%s\n' "$SERVER_CONFIG" >/etc/wireguard/"$WG_DEVICE".conf
     chmod 0600 /etc/wireguard/"$WG_DEVICE".conf
   fi
+}
+
+detect_egress_interface() {
+  ip route show default 0.0.0.0/0 | awk 'NR==1 {for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}'
+}
+
+append_direct_forwarding_hooks() {
+  local config_text="$1"
+  local egress client_ip post_up post_down
+  egress="$(detect_egress_interface)"
+  [ -n "$egress" ] || fail "cannot detect default egress interface"
+  client_ip="${WG_CLIENT_ADDR%%/*}"
+  post_up="PostUp = sysctl -w net.ipv4.ip_forward=1; iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -i %i -j ACCEPT; iptables -C FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -C POSTROUTING -s $client_ip/32 -o $egress -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s $client_ip/32 -o $egress -j MASQUERADE"
+  post_down="PostDown = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; iptables -D FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true; iptables -t nat -D POSTROUTING -s $client_ip/32 -o $egress -j MASQUERADE 2>/dev/null || true"
+  printf '%s\n' "$config_text" | awk -v post_up="$post_up" -v post_down="$post_down" '
+    /^\[Peer\][[:space:]]*$/ && !inserted {
+      print post_up
+      print post_down
+      inserted = 1
+    }
+    { print }
+    END {
+      if (!inserted) {
+        print post_up
+        print post_down
+      }
+    }
+  '
 }
 
 start_remote_wireguard() {
@@ -155,7 +213,7 @@ enable_direct_forwarding() {
     return 0
   fi
   local egress client_ip
-  egress="$(ip route show default 0.0.0.0/0 | awk 'NR==1 {for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')"
+  egress="$(detect_egress_interface)"
   [ -n "$egress" ] || fail "cannot detect default egress interface"
   client_ip="${WG_CLIENT_ADDR%%/*}"
   run mkdir -p /etc/sysctl.d
@@ -179,7 +237,6 @@ register_node_placeholder() {
     fail "token and server must be provided together"
   fi
 
-  command -v python3 >/dev/null 2>&1 || fail "python3 is required for deploy-token registration"
   detect_endpoint
   prepare_endpoint_port
   generate_wg_keypair
@@ -189,7 +246,7 @@ register_node_placeholder() {
     -X POST \
     -H 'Content-Type: application/json' \
     -d "{\"token\":\"$TOKEN\",\"endpoint\":\"$ENDPOINT\",\"endpoint_port\":$WG_ENDPOINT_PORT,\"server_private_key\":\"$SERVER_PRIVATE_KEY\",\"server_public_key\":\"$SERVER_PUBLIC_KEY\",\"listen_port\":$WG_LISTEN_PORT}" \
-    "$SERVER/register/prepare")" || fail "register prepare failed"
+    "$SERVER/register/prepare?format=sh")" || fail "register prepare failed"
   write_remote_config "$response"
   start_remote_wireguard
   enable_direct_forwarding
@@ -200,14 +257,20 @@ register_node_placeholder() {
     -H 'Content-Type: application/json' \
     -d "{\"token\":\"$TOKEN\"}" \
     "$SERVER/register/complete" >/dev/null
+  log "node auto registration completed; run 'warppool wg up <node>' and 'warppool proxy service enable' on the main server"
 }
 
 main() {
   parse_args "$@"
   install_packages
   configure_wireguard_placeholder
+  install_node_uninstaller
   maybe_install_warp
   register_node_placeholder
+  if [ -z "$TOKEN" ] && [ -z "$SERVER" ]; then
+    log "node dependencies installed only; no main server registration was performed"
+    log "to auto-register later, run 'warppool deploy-token' on the main server and execute the generated command on this node"
+  fi
   log "Ubuntu installation completed"
 }
 

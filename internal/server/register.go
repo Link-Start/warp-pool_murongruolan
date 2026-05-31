@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -121,7 +122,12 @@ func RegisterHandler(configPath string) http.Handler {
 			return
 		}
 
-		writePrepareJSON(w, http.StatusOK, PrepareResponse{OK: true, Message: "prepared", Node: node, ServerConfig: plan.ServerConfig})
+		response := PrepareResponse{OK: true, Message: "prepared", Node: node, ServerConfig: plan.ServerConfig}
+		if r.URL.Query().Get("format") == "sh" {
+			writePrepareShell(w, http.StatusOK, response)
+			return
+		}
+		writePrepareJSON(w, http.StatusOK, response)
 	})
 	mux.HandleFunc("/register/complete", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -208,4 +214,23 @@ func writePrepareJSON(w http.ResponseWriter, status int, value PrepareResponse) 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func writePrepareShell(w http.ResponseWriter, status int, value PrepareResponse) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(status)
+	ok := "0"
+	if value.OK {
+		ok = "1"
+	}
+	fmt.Fprintf(w, "OK=%s\n", ok)
+	fmt.Fprintf(w, "MESSAGE_B64=%s\n", shellB64(value.Message))
+	fmt.Fprintf(w, "WG_DEVICE_B64=%s\n", shellB64(value.Node.WGDevice))
+	fmt.Fprintf(w, "WG_SERVER_ADDR_B64=%s\n", shellB64(value.Node.WGServerAddress))
+	fmt.Fprintf(w, "WG_CLIENT_ADDR_B64=%s\n", shellB64(value.Node.WGClientAddress))
+	fmt.Fprintf(w, "SERVER_CONFIG_B64=%s\n", shellB64(value.ServerConfig))
+}
+
+func shellB64(value string) string {
+	return base64.StdEncoding.EncodeToString([]byte(value))
 }

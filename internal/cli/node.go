@@ -6,6 +6,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/murongruolan/warp-pool/internal/config"
+	"github.com/murongruolan/warp-pool/internal/wgclient"
 	"github.com/spf13/cobra"
 )
 
@@ -123,6 +124,8 @@ func newNodeShowCommand() *cobra.Command {
 }
 
 func newNodeRemoveCommand() *cobra.Command {
+	var cleanWG bool
+
 	cmd := &cobra.Command{
 		Use:     "remove <name>",
 		Aliases: []string{"rm"},
@@ -133,6 +136,21 @@ func newNodeRemoveCommand() *cobra.Command {
 			cfg, err := config.Load(path)
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
+			}
+
+			node, ok := config.FindNode(cfg, args[0])
+			if !ok {
+				return fmt.Errorf("node not found: %s", args[0])
+			}
+
+			if cleanWG {
+				result, err := removeLocalNodeWG(node)
+				for _, log := range result.Logs {
+					fmt.Fprintln(cmd.OutOrStdout(), log)
+				}
+				if err != nil {
+					return err
+				}
 			}
 
 			cfg, removed, err := config.RemoveNode(cfg, args[0])
@@ -148,7 +166,36 @@ func newNodeRemoveCommand() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&cleanWG, "clean-wg", false, "also stop and remove local WireGuard client config for this node")
 	return cmd
+}
+
+func newRemoveCommand() *cobra.Command {
+	cmd := newNodeRemoveCommand()
+	cmd.Use = "remove <name>"
+	cmd.Short = "Remove a local node"
+	return cmd
+}
+
+func removeLocalNodeWG(node config.Node) (uninstallResult, error) {
+	opts := uninstallDefaults(uninstallOptions{CleanWG: true, CleanWGSet: true, SkipInteractive: true})
+	result := uninstallResult{}
+	if err := wgDownBestEffort(node, opts, &result); err != nil {
+		return result, err
+	}
+	device := node.WGLocalDevice
+	if device == "" {
+		device = wgclient.DefaultLocalDeviceName(node.Name)
+	}
+	if opts.RuntimeOS == "linux" {
+		_ = runBestEffort(opts, &result, "systemctl", "disable", "wg-quick@"+device)
+	}
+	if node.WGLocalConfigPath != "" {
+		if err := removePath(opts, node.WGLocalConfigPath, &result, false); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
 }
 
 func resolvedConfigPath() string {

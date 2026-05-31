@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bufio"
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,11 +20,22 @@ func (r *uninstallFakeRunner) Run(name string, args ...string) ([]byte, error) {
 	return nil, nil
 }
 
-func TestUninstallNodeRemovesRecordAndLocalConfig(t *testing.T) {
+func TestUninstallAllCanCleanWGAndProxy(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 	wgPath := filepath.Join(dir, "wpcnat1.conf")
+	stateDir := filepath.Join(dir, "state")
+	installDir := filepath.Join(dir, "install")
+	binaryPath := filepath.Join(dir, "warppool")
 	if err := os.WriteFile(wgPath, []byte("wg"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{stateDir, installDir} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(binaryPath, []byte("bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -41,24 +54,30 @@ func TestUninstallNodeRemovesRecordAndLocalConfig(t *testing.T) {
 	}
 
 	runner := &uninstallFakeRunner{}
-	_, err := uninstallNode("nat1", uninstallOptions{
-		ConfigPath: cfgPath,
-		RuntimeOS:  "test",
-		Runner:     runner,
+	_, err := uninstallAll(uninstallOptions{
+		ConfigPath:    cfgPath,
+		StateDir:      stateDir,
+		InstallDir:    installDir,
+		BinaryPath:    binaryPath,
+		RuntimeOS:     "test",
+		Runner:        runner,
+		CleanWG:       true,
+		CleanProxy:    true,
+		CleanWGSet:    true,
+		CleanProxySet: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	next, err := config.Load(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(next.Nodes) != 0 {
-		t.Fatalf("expected node record removed: %#v", next.Nodes)
-	}
 	if _, err := os.Stat(wgPath); !os.IsNotExist(err) {
 		t.Fatalf("expected wg config removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
+		t.Fatalf("expected state dir removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(binaryPath); !os.IsNotExist(err) {
+		t.Fatalf("expected binary removed, stat err=%v", err)
 	}
 }
 
@@ -98,6 +117,45 @@ func TestUninstallAllDryRunDoesNotRemoveFiles(t *testing.T) {
 	}
 	if !hasUninstallLog(result.Logs, "dry-run: remove "+cfgPath) {
 		t.Fatalf("expected dry-run remove config log: %#v", result.Logs)
+	}
+}
+
+func TestUninstallAllPromptsForWGAndProxy(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	stateDir := filepath.Join(dir, "state")
+	installDir := filepath.Join(dir, "install")
+	binaryPath := filepath.Join(dir, "warppool")
+	for _, path := range []string{stateDir, installDir} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(binaryPath, []byte("bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(cfgPath, config.Default(), true); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	_, err := uninstallAll(uninstallOptions{
+		ConfigPath: cfgPath,
+		StateDir:   stateDir,
+		InstallDir: installDir,
+		BinaryPath: binaryPath,
+		RuntimeOS:  "test",
+		Runner:     &uninstallFakeRunner{},
+		Prompt:     promptIO{in: bufio.NewReader(bytes.NewBufferString("n\ny\n")), out: &out},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
+		t.Fatalf("expected proxy state removed after yes answer, stat err=%v", err)
+	}
+	if !strings.Contains(out.String(), "WireGuard") || !strings.Contains(out.String(), "proxy") {
+		t.Fatalf("expected prompts, got: %s", out.String())
 	}
 }
 

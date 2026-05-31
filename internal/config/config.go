@@ -381,6 +381,47 @@ func AddDeployToken(cfg Config, token DeployToken) (Config, error) {
 	return cfg, nil
 }
 
+func RemoveDeployTokens(cfg Config, target string, includeUsed bool) (Config, int) {
+	if target == "" {
+		return cfg, 0
+	}
+
+	next := cfg.Tokens[:0]
+	removed := 0
+	for _, token := range cfg.Tokens {
+		matches := token.Token == target || token.Node.Name == target
+		if matches && (includeUsed || !token.Used) {
+			removed++
+			continue
+		}
+		next = append(next, token)
+	}
+	cfg.Tokens = next
+	return cfg, removed
+}
+
+func PruneExpiredDeployTokens(cfg Config, now time.Time) (Config, int) {
+	next := cfg.Tokens[:0]
+	removed := 0
+	for _, token := range cfg.Tokens {
+		if !token.Used && deployTokenExpired(token, now) {
+			removed++
+			continue
+		}
+		next = append(next, token)
+	}
+	cfg.Tokens = next
+	return cfg, removed
+}
+
+func deployTokenExpired(token DeployToken, now time.Time) bool {
+	expiresAt, err := time.Parse(time.RFC3339, token.ExpiresAt)
+	if err != nil {
+		return true
+	}
+	return now.After(expiresAt)
+}
+
 func UseDeployToken(cfg Config, tokenValue string, now time.Time) (Config, Node, error) {
 	for i, token := range cfg.Tokens {
 		if token.Token != tokenValue {

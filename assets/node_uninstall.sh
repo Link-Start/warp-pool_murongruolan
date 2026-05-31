@@ -1,0 +1,303 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+DEVICE=""
+ALL="false"
+REMOVE_WARP="false"
+REMOVE_WIREGUARD="false"
+DRY_RUN="false"
+
+log() {
+  printf '[WarpPool][node-uninstall] %s\n' "$*"
+}
+
+fail() {
+  printf '[WarpPool][node-uninstall][ERROR] %s\n' "$*" >&2
+  exit 1
+}
+
+on_error() {
+  local status=$?
+  local line="$1"
+  printf '[WarpPool][node-uninstall][ERROR] command failed with exit %s at line %s: %s\n' "$status" "$line" "$BASH_COMMAND" >&2
+  exit "$status"
+}
+
+trap 'on_error $LINENO' ERR
+
+usage() {
+  cat <<'USAGE'
+WarpPool remote node uninstaller
+
+Usage:
+  warppool-node-uninstall [device=wpnat01|all=true] [remove_warp=true] [remove_wireguard=true] [--dry-run]
+  bash node_uninstall.sh [device=wpnat01|all=true] [remove_warp=true] [remove_wireguard=true] [--dry-run]
+
+Examples:
+  warppool-node-uninstall device=wpnat01
+  warppool-node-uninstall all=true
+  warppool-node-uninstall all=true remove_warp=true
+
+Notes:
+  - Without device= or all=true, the script auto-selects the only /etc/wireguard/wp*.conf file if exactly one exists.
+  - remove_warp=true removes the Cloudflare WARP package and repository when apt is available.
+  - remove_wireguard=true removes WireGuard packages when apt/apk is available.
+USAGE
+}
+
+parse_args() {
+  for arg in "$@"; do
+    case "$arg" in
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      --dry-run)
+        DRY_RUN="true"
+        ;;
+      device=*) DEVICE="${arg#device=}" ;;
+      all=*) ALL="${arg#all=}" ;;
+      remove_warp=*) REMOVE_WARP="${arg#remove_warp=}" ;;
+      remove_wireguard=*) REMOVE_WIREGUARD="${arg#remove_wireguard=}" ;;
+      *) fail "unknown argument: $arg" ;;
+    esac
+  done
+}
+
+validate_bool() {
+  local name="$1"
+  local value="$2"
+  case "$value" in
+    true|false) ;;
+    *) fail "$name must be true or false, got: $value" ;;
+  esac
+}
+
+run() {
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: $*"
+    return 0
+  fi
+  "$@"
+}
+
+require_root() {
+  if [ "$DRY_RUN" = "true" ]; then
+    return 0
+  fi
+  if [ "$(id -u)" -ne 0 ]; then
+    fail "must run as root"
+  fi
+}
+
+validate_device() {
+  local device="$1"
+  case "$device" in
+    ""|*[!a-zA-Z0-9_.-]*)
+      fail "invalid WireGuard device name: $device"
+      ;;
+  esac
+}
+
+discover_devices() {
+  if [ -n "$DEVICE" ]; then
+    validate_device "$DEVICE"
+    printf '%s\n' "$DEVICE"
+    return 0
+  fi
+
+  local configs=()
+  local path
+  for path in /etc/wireguard/wp*.conf; do
+    [ -e "$path" ] || continue
+    configs+=("$(basename "$path" .conf)")
+  done
+
+  if [ "$ALL" = "true" ]; then
+    if [ "${#configs[@]}" -eq 0 ]; then
+      fail "no WarpPool WireGuard configs found under /etc/wireguard/wp*.conf"
+    fi
+    printf '%s\n' "${configs[@]}"
+    return 0
+  fi
+
+  if [ "${#configs[@]}" -eq 1 ]; then
+    printf '%s\n' "${configs[0]}"
+    return 0
+  fi
+  if [ "${#configs[@]}" -eq 0 ]; then
+    fail "no WarpPool WireGuard configs found; pass device=<wg-device> if the config was already removed"
+  fi
+  fail "multiple WarpPool WireGuard configs found: ${configs[*]}; pass device=<wg-device> or all=true"
+}
+
+systemd_available() {
+  command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
+}
+
+disable_systemd_unit() {
+  local unit="$1"
+  if systemd_available; then
+    run systemctl disable --now "$unit" >/dev/null 2>&1 || true
+  fi
+}
+
+remove_systemd_unit_file() {
+  local unit_path="$1"
+  if [ -e "$unit_path" ]; then
+    run rm -f "$unit_path"
+    if systemd_available; then
+      run systemctl daemon-reload
+    fi
+  fi
+}
+
+delete_nat_redirect_rules() {
+  local device="$1"
+  if ! command -v iptables >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: remove iptables redirect/input rules for $device"
+    return 0
+  fi
+
+  local rule spec
+  while IFS= read -r rule; do
+    case "$rule" in
+      *" -i $device "*"-j REDIRECT "*)
+        spec="${rule#-A PREROUTING }"
+        # shellcheck disable=SC2086
+        iptables -t nat -D PREROUTING $spec >/dev/null 2>&1 || true
+        ;;
+    esac
+  done <<EOF_RULES
+$(iptables -t nat -S PREROUTING 2>/dev/null || true)
+EOF_RULES
+
+  while IFS= read -r rule; do
+    case "$rule" in
+      *" -i $device "*"-j ACCEPT"*)
+        spec="${rule#-A INPUT }"
+        # shellcheck disable=SC2086
+        iptables -D INPUT $spec >/dev/null 2>&1 || true
+        ;;
+    esac
+  done <<EOF_RULES
+$(iptables -S INPUT 2>/dev/null || true)
+EOF_RULES
+}
+
+stop_legacy_pid() {
+  local pid_path="$1"
+  if [ ! -r "$pid_path" ]; then
+    return 0
+  fi
+  local pid
+  pid="$(cat "$pid_path" 2>/dev/null || true)"
+  if [ -n "$pid" ]; then
+    run kill "$pid" >/dev/null 2>&1 || true
+  fi
+  run rm -f "$pid_path"
+}
+
+remove_warp_forwarding() {
+  local device="$1"
+  local unit="warppool-warp-forward-$device.service"
+  local unit_path="/etc/systemd/system/$unit"
+  disable_systemd_unit "$unit"
+  remove_systemd_unit_file "$unit_path"
+  stop_legacy_pid "/var/lib/warppool/warp-forward/$device.pid"
+  delete_nat_redirect_rules "$device"
+  run rm -f "/var/lib/warppool/warp-forward/$device.json" "/var/lib/warppool/warp-forward/$device.log"
+}
+
+remove_wireguard_device() {
+  local device="$1"
+  disable_systemd_unit "wg-quick@$device.service"
+  run wg-quick down "$device" >/dev/null 2>&1 || true
+  if command -v ip >/dev/null 2>&1 && ip link show "$device" >/dev/null 2>&1; then
+    run ip link delete dev "$device" >/dev/null 2>&1 || true
+  fi
+  run rm -f "/etc/wireguard/$device.conf"
+}
+
+remaining_warppool_configs() {
+  local path
+  for path in /etc/wireguard/wp*.conf; do
+    [ -e "$path" ] || continue
+    return 0
+  done
+  return 1
+}
+
+cleanup_global_warppool_state_if_empty() {
+  if remaining_warppool_configs; then
+    return 0
+  fi
+  run rm -f /etc/sysctl.d/99-warppool.conf
+  run rm -f /usr/local/bin/warppool-node-uninstall
+  run rm -rf /var/lib/warppool/warp-forward
+  run rmdir /var/lib/warppool >/dev/null 2>&1 || true
+  run rm -rf /usr/local/lib/warppool
+}
+
+remove_warp_package() {
+  if [ "$REMOVE_WARP" != "true" ]; then
+    return 0
+  fi
+  log "removing Cloudflare WARP package"
+  if systemd_available; then
+    run systemctl disable --now warp-svc.service >/dev/null 2>&1 || true
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    run env DEBIAN_FRONTEND=noninteractive apt-get purge -y cloudflare-warp
+    run rm -f /etc/apt/sources.list.d/cloudflare-client.list /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+    return 0
+  fi
+  log "warning: apt-get not found, skipping Cloudflare WARP package removal"
+}
+
+remove_wireguard_packages() {
+  if [ "$REMOVE_WIREGUARD" != "true" ]; then
+    return 0
+  fi
+  log "removing WireGuard packages"
+  if command -v apt-get >/dev/null 2>&1; then
+    run env DEBIAN_FRONTEND=noninteractive apt-get purge -y wireguard wireguard-tools
+    return 0
+  fi
+  if command -v apk >/dev/null 2>&1; then
+    run apk del wireguard-tools
+    return 0
+  fi
+  log "warning: supported package manager not found, skipping WireGuard package removal"
+}
+
+main() {
+  parse_args "$@"
+  validate_bool all "$ALL"
+  validate_bool remove_warp "$REMOVE_WARP"
+  validate_bool remove_wireguard "$REMOVE_WIREGUARD"
+  require_root
+
+  local devices
+  devices="$(discover_devices)"
+  local device
+  while IFS= read -r device; do
+    [ -n "$device" ] || continue
+    validate_device "$device"
+    log "removing node device: $device"
+    remove_warp_forwarding "$device"
+    remove_wireguard_device "$device"
+  done <<EOF_DEVICES
+$devices
+EOF_DEVICES
+
+  cleanup_global_warppool_state_if_empty
+  remove_warp_package
+  remove_wireguard_packages
+  log "remote node uninstall completed"
+}
+
+main "$@"

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"testing"
 )
@@ -50,5 +51,24 @@ func TestPromptRequiredIntRejectsEmptyThenReadsValue(t *testing.T) {
 	}
 	if got != 12345 {
 		t.Fatalf("unexpected value: %d", got)
+	}
+}
+
+func TestPromptBoolDefaultAndSelection(t *testing.T) {
+	inputReader = bytes.NewBufferString("\nn\n")
+	t.Cleanup(func() { inputReader = defaultInputReader() })
+
+	var out bytes.Buffer
+	p := promptIO{in: bufio.NewReader(bytes.NewBufferString("\nn\n")), out: &out}
+	first, err := p.askBool("remove wg", false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := p.askBool("remove proxy", false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first || second {
+		t.Fatalf("unexpected bool results: %v %v", first, second)
 	}
 }

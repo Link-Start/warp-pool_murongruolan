@@ -50,9 +50,17 @@ register_and_connect() {
   require_command warp-cli
   require_command curl
 
-  if warp-cli --accept-tos status >/dev/null 2>&1; then
-    log "WARP client already registered"
+  local registration=""
+  registration="$(warp-cli --accept-tos registration show 2>&1 || true)"
+  if printf '%s\n' "$registration" | grep -qi 'Missing registration'; then
+    log "registering WARP client"
+    warp-cli --accept-tos registration new || fail "warp-cli registration new failed"
   else
+    log "WARP client already registered"
+  fi
+
+  registration="$(warp-cli --accept-tos registration show 2>&1 || true)"
+  if printf '%s\n' "$registration" | grep -qi 'Missing registration'; then
     log "registering WARP client"
     warp-cli --accept-tos registration new || fail "warp-cli registration new failed"
   fi

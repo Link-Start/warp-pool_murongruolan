@@ -113,9 +113,8 @@ WARP mode depends on Cloudflare's official Linux client packages. Alpine WARP mo
 
 Main server:
 
-- Linux recommended
 - Root permission for the one-line installer
-- WireGuard tools for `warppool wg up`
+- WireGuard tools for `warppool wg up` (installed automatically by the official installer)
 - sing-box installed by the one-line installer or provided manually
 
 Exit node:
@@ -123,7 +122,6 @@ Exit node:
 - Root SSH access
 - `/dev/net/tun`
 - IPv4 connectivity
-- UDP port allowed for WireGuard
 - `apt` or `apk` package manager depending on OS
 
 ---
@@ -181,6 +179,8 @@ WireGuard ports are split into two values:
 - `wg-listen-port`: the WireGuard listen port on the exit node. Default: `51820`.
 - `wg-endpoint-port`: the public port used by the main server to connect to the exit node. On NAT VPS nodes, this is often different from the node-side listen port.
 
+Push mode asks for the SSH port, the node-side WireGuard listen port, and the public WireGuard mapped port. NAT nodes commonly use non-standard SSH and UDP mapped ports, so enter the real forwarded ports from your provider.
+
 By default, SSH host key verification is enabled. For temporary tests only:
 
 ```bash
@@ -204,7 +204,7 @@ warppool wg up nat01
 Start local proxy:
 
 ```bash
-warppool proxy start
+warppool proxy service enable
 ```
 
 Test the proxy:
@@ -259,16 +259,35 @@ MVP limitation: WARP forwarding is TCP-first. UDP and IPv6 are not promised as c
 Pull installation scripts are available:
 
 ```bash
+wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash
+```
+
+The script enters an interactive menu:
+
+1. Select exit mode. Default: `direct`.
+2. Enter the main server IP/domain. Press Enter to skip auto registration.
+3. If a main server address is entered, enter the registration port. IPv4 defaults to `8080`; domains default to `80`.
+4. Enter a Deploy Token if auto registration is needed.
+
+If the main server IP or Deploy Token is left empty, the script only installs node dependencies. It will not write WireGuard config and will not create a node record on the main server. You can later run `warppool deploy-token` on the main server and execute the generated one-line command on the node.
+
+Non-interactive direct mode:
+
+```bash
 wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- mode=direct
 ```
 
-WARP mode:
+Non-interactive WARP mode:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- mode=warp
 ```
 
-Pure Pull mode installs node dependencies. To automatically receive WireGuard config and register back to the main server, use Deploy Token.
+Auto-register with Deploy Token:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- mode=direct token=<token> server=http://<main-server-ip>:8080
+```
 
 ---
 
@@ -303,45 +322,83 @@ The generated node installer command will include `wg_listen_port` and `wg_endpo
 ### Node
 
 ```bash
-warppool node list
-warppool show nat01
-warppool node remove nat01
+warppool node list # List nodes
+warppool show nat01 # Show node nat01 details
+warppool remove nat01 # Remove node nat01 record only
+warppool node remove nat01 --clean-wg # Remove node nat01 and delete local WG client config
 ```
+
+`remove` only removes the node record. Add `--clean-wg` when you also want to stop and delete the local WireGuard client config on the main server.
 
 ### WireGuard
 
 ```bash
-warppool wg config nat01
-warppool wg up nat01
-warppool wg status nat01
-warppool wg down nat01
+warppool wg config nat01 # Print local WireGuard client config for nat01
+warppool wg up nat01 # Start local WireGuard client for nat01
+warppool wg status nat01 # Show local WireGuard status for nat01
+warppool wg down nat01 # Stop local WireGuard client for nat01
 ```
 
 ### Proxy
 
 ```bash
-warppool proxy config -o sing-box.json
-warppool proxy start
-warppool proxy status
-warppool proxy stop
+warppool proxy config -o sing-box.json # Generate sing-box config
+warppool proxy start # Start local proxy as a temporary process
+warppool proxy service install # Create local proxy systemd service
+warppool proxy service enable # Start local proxy and enable autostart
+warppool proxy status # Show local proxy status
+warppool proxy stop # Stop the temporary local proxy process
 ```
 
 ### Clash Export
 
 ```bash
-warppool export clash -o clash.yaml
+warppool export clash -o clash.yaml # Export Clash-compatible config
 ```
 
 ### Diagnostics
 
 ```bash
-warppool version
-warppool doctor
-warppool ping nat01
-warppool speedtest --proxy http://127.0.0.1:10133
+warppool version # Show version information
+warppool doctor # Check local runtime and port status
+warppool ping nat01 # Test WireGuard connectivity to nat01
+warppool speedtest --proxy http://127.0.0.1:10133 # Run a simple speed test through a proxy
 ```
 
 MVP note: `speedtest` is safest with HTTP proxy URLs. Full SOCKS proxy handling is planned before stable release.
+
+### Uninstall
+
+```bash
+warppool uninstall --force # Uninstall WarpPool program and runtime state from the main server
+```
+
+`uninstall` is only for uninstalling the main server program. It asks whether to remove local WireGuard client configs and whether to remove local proxy/listener services plus runtime state. To remove a node, use `warppool remove <name>`.
+
+### Remote Node Uninstall
+
+Push deployment installs a helper command on the exit node:
+
+```bash
+warppool-node-uninstall
+```
+
+Common usage on the exit node:
+
+```bash
+warppool-node-uninstall device=wpnat01 # Remove one WarpPool WireGuard device
+warppool-node-uninstall all=true # Remove all WarpPool WireGuard devices on this node
+warppool-node-uninstall all=true remove_warp=true # Also remove Cloudflare WARP package
+warppool-node-uninstall all=true remove_wireguard=true # Also remove WireGuard packages
+```
+
+If exactly one `/etc/wireguard/wp*.conf` file exists, `warppool-node-uninstall` can run without arguments. If multiple WarpPool devices exist, pass `device=<wg-device>` or `all=true`.
+
+For Pull-only nodes where the helper was not installed, run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/node_uninstall.sh | sudo bash -s -- all=true
+```
 
 ---
 
@@ -361,11 +418,12 @@ Keep the config file private.
 
 ## Release Process
 
-Release builds only run on tags matching:
+Release builds only run when tags are pushed. Normal branch pushes do not create GitHub Releases.
 
-```text
-v*.*.*
-```
+Published packages:
+
+- `warppool-linux-amd64.tar.gz`
+- `warppool-linux-arm64.tar.gz`
 
 `VERSION` contains one line:
 
@@ -377,19 +435,10 @@ From the `developer` branch:
 
 ```powershell
 .\scripts\release.ps1 patch
+git push origin developer v0.1.1
 ```
 
-The script:
-
-1. Checks the current branch is `developer`.
-2. Checks the working tree is clean.
-3. Bumps `VERSION`.
-4. Ensures the new tag does not exist locally or remotely.
-5. Commits with a Chinese release message.
-6. Creates an annotated tag like `v0.1.1`.
-7. Pushes `developer` and the tag.
-
-Normal branch pushes do not create GitHub Releases.
+The script checks the working tree, updates `VERSION`, creates a Chinese commit, and creates an annotated tag. GitHub Actions verifies that the tag equals `v<VERSION>`.
 
 ---
 
@@ -409,6 +458,4 @@ Normal branch pushes do not create GitHub Releases.
 - No database.
 - No multi-user permission model.
 - No remote Agent.
-- `upgrade` and `uninstall` are safe placeholder commands in MVP.
-- sing-box service persistence is not finalized; restart `warppool proxy start` after reboot if needed.
-- `warppool show` output hardening is planned before stable release.
+- `upgrade` is a safe placeholder command in MVP.

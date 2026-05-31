@@ -45,6 +45,35 @@ type ManagerOptions struct {
 	Runtime    string
 }
 
+func Run(data []byte, opts ManagerOptions) error {
+	opts = managerDefaults(opts)
+	if err := WriteConfig(opts.ConfigPath, data); err != nil {
+		return fmt.Errorf("write sing-box config: %w", err)
+	}
+	cmd := exec.Command(opts.Binary, "run", "-c", opts.ConfigPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("run sing-box using %q: %w", opts.Binary, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(opts.PIDPath), 0o755); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return err
+	}
+	if err := os.WriteFile(opts.PIDPath, []byte(fmt.Sprintf("%d\n", cmd.Process.Pid)), 0o600); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("write pid file: %w", err)
+	}
+	defer os.Remove(opts.PIDPath)
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("run sing-box using %q: %w", opts.Binary, err)
+	}
+	return nil
+}
+
 type StartResult struct {
 	ConfigPath string
 	PIDPath    string
@@ -69,7 +98,7 @@ func WriteConfig(path string, data []byte) error {
 
 func Start(data []byte, opts ManagerOptions) (StartResult, error) {
 	opts = managerDefaults(opts)
-	if err := checkInboundPorts(data); err != nil {
+	if err := CheckInboundPorts(data); err != nil {
 		return StartResult{}, err
 	}
 	if err := WriteConfig(opts.ConfigPath, data); err != nil {
@@ -101,7 +130,7 @@ func Start(data []byte, opts ManagerOptions) (StartResult, error) {
 	return result, nil
 }
 
-func checkInboundPorts(data []byte) error {
+func CheckInboundPorts(data []byte) error {
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return fmt.Errorf("parse sing-box config for port check: %w", err)
@@ -163,6 +192,10 @@ func Status(opts ManagerOptions) (StatusResult, error) {
 
 func DefaultConfigPath() string {
 	return filepath.Join(defaultStateDir(), "sing-box.json")
+}
+
+func DefaultStateDir() string {
+	return defaultStateDir()
 }
 
 func DefaultPIDPath() string {

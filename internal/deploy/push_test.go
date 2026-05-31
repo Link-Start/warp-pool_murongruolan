@@ -136,6 +136,16 @@ func TestWarpForwardCommandIncludesServerAddress(t *testing.T) {
 	}
 }
 
+func TestInstallRemoteNodeUninstallerCommandPathEscapesRemoteDir(t *testing.T) {
+	command := installRemoteNodeUninstallerCommand("/tmp/custom dir")
+	if !strings.Contains(command, "'/tmp/custom dir/node_uninstall.sh'") {
+		t.Fatalf("missing escaped node_uninstall.sh path:\n%s", command)
+	}
+	if !strings.Contains(command, "/usr/local/bin/warppool-node-uninstall") {
+		t.Fatalf("missing install target:\n%s", command)
+	}
+}
+
 func wireguardPlan() wireguard.Plan {
 	return wireguard.Plan{
 		Device:        "wpnat-warp",

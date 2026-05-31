@@ -3,6 +3,8 @@ package cli
 import (
 	"fmt"
 	"net"
+	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/murongruolan/warp-pool/internal/config"
@@ -11,6 +13,14 @@ import (
 )
 
 func newDeployTokenCommand() *cobra.Command {
+	cmd := newDeployTokenCreateCommand()
+	cmd.AddCommand(newDeployTokenListCommand())
+	cmd.AddCommand(newDeployTokenRemoveCommand())
+	cmd.AddCommand(newDeployTokenPruneCommand())
+	return cmd
+}
+
+func newDeployTokenCreateCommand() *cobra.Command {
 	var node config.Node
 	var ttl time.Duration
 	var publicHost string
@@ -111,6 +121,107 @@ func newDeployTokenCommand() *cobra.Command {
 	cmd.Flags().IntVar(&wgEndpointPort, "wg-endpoint-port", 0, "WireGuard public endpoint port, useful for NAT port forwarding")
 
 	return cmd
+}
+
+func newDeployTokenListCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List Deploy Tokens",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load(resolvedConfigPath())
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "NODE\tPORT\tMODE\tSTATUS\tEXPIRES_AT\tTOKEN")
+			now := time.Now().UTC()
+			for _, item := range cfg.Tokens {
+				fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\t%s\n",
+					item.Node.Name,
+					item.Node.LocalPort,
+					item.Node.ExitMode,
+					deployTokenStatus(item, now),
+					item.ExpiresAt,
+					shortDeployToken(item.Token),
+				)
+			}
+			return w.Flush()
+		},
+	}
+	return cmd
+}
+
+func newDeployTokenRemoveCommand() *cobra.Command {
+	var includeUsed bool
+	cmd := &cobra.Command{
+		Use:   "remove <token-or-node>",
+		Short: "Remove unused Deploy Token by token value or node name",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := resolvedConfigPath()
+			cfg, err := config.Load(path)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			cfg, removed := config.RemoveDeployTokens(cfg, args[0], includeUsed)
+			if removed == 0 {
+				return fmt.Errorf("deploy token not found or already used: %s", args[0])
+			}
+			if err := config.SaveExisting(path, cfg); err != nil {
+				return fmt.Errorf("save config: %w", err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "removed deploy tokens: %d\n", removed)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&includeUsed, "include-used", false, "also remove used token history")
+	return cmd
+}
+
+func newDeployTokenPruneCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "prune",
+		Short: "Remove expired unused Deploy Tokens",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := resolvedConfigPath()
+			cfg, err := config.Load(path)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			cfg, removed := config.PruneExpiredDeployTokens(cfg, time.Now().UTC())
+			if err := config.SaveExisting(path, cfg); err != nil {
+				return fmt.Errorf("save config: %w", err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "pruned deploy tokens: %d\n", removed)
+			return nil
+		},
+	}
+	return cmd
+}
+
+func deployTokenStatus(item config.DeployToken, now time.Time) string {
+	if item.Used {
+		if item.Registered {
+			return "registered"
+		}
+		return "used"
+	}
+	expiresAt, err := time.Parse(time.RFC3339, item.ExpiresAt)
+	if err != nil || now.After(expiresAt) {
+		return "expired"
+	}
+	if item.Prepared {
+		return "prepared"
+	}
+	return "unused"
+}
+
+func shortDeployToken(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 12 {
+		return value
+	}
+	return value[:6] + "..." + value[len(value)-6:]
 }
 
 func promptDeployTokenOptions(prompt promptIO, cfg config.Config, node *config.Node) error {

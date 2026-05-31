@@ -120,6 +120,36 @@ func (p promptIO) askRequiredInt(label string, current int) (int, error) {
 	}
 }
 
+func (p promptIO) askBool(label string, current bool, def bool) (bool, error) {
+	if current {
+		return true, nil
+	}
+	reader := bufio.NewReader(p.in)
+	defaultText := "n"
+	if def {
+		defaultText = "y"
+	}
+	for {
+		fmt.Fprintf(p.out, "%s [y/n, default %s]: ", label, defaultText)
+		value, err := reader.ReadString('\n')
+		if err != nil {
+			return false, fmt.Errorf("read %s: %w", label, err)
+		}
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			return def, nil
+		}
+		switch value {
+		case "y", "yes":
+			return true, nil
+		case "n", "no":
+			return false, nil
+		default:
+			fmt.Fprintln(p.out, "enter y or n")
+		}
+	}
+}
+
 func (p promptIO) askMenu(label string, current string, def string, options []menuOption) (string, error) {
 	if strings.TrimSpace(current) != "" {
 		return current, nil
