@@ -167,12 +167,13 @@ func configureRemoteWarpForwarding(client *sshclient.Client, plan wireguard.Plan
 	}
 	scriptPath := filepath.ToSlash(filepath.Join(remoteDir, "warp_forward.sh"))
 	command := fmt.Sprintf(
-		"if [ -x %s ]; then bash %s %s %s %s %s; else echo '[WarpPool][warp-forward][ERROR] warp_forward.sh not found in deploy assets' >&2; exit 1; fi",
+		"if [ -x %s ]; then bash %s %s %s %s %s %s; else echo '[WarpPool][warp-forward][ERROR] warp_forward.sh not found in deploy assets' >&2; exit 1; fi",
 		shellPath(scriptPath),
 		shellPath(scriptPath),
 		shellPath("action=up"),
 		shellPath("device="+plan.Device),
 		shellPath("client_addr="+plan.ClientAddress),
+		shellPath("server_addr="+plan.ServerAddress),
 		shellPath(fmt.Sprintf("transparent_port=%d", warpPort)),
 	)
 	remoteResult, err := client.Run(command)

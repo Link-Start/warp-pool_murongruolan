@@ -50,8 +50,12 @@ register_and_connect() {
   require_command warp-cli
   require_command curl
 
-  log "registering WARP client"
-  warp-cli --accept-tos registration new || fail "warp-cli registration new failed"
+  if warp-cli --accept-tos status >/dev/null 2>&1; then
+    log "WARP client already registered"
+  else
+    log "registering WARP client"
+    warp-cli --accept-tos registration new || fail "warp-cli registration new failed"
+  fi
 
   log "setting WARP proxy mode"
   warp-cli --accept-tos mode proxy || fail "warp-cli mode proxy failed"
@@ -60,12 +64,19 @@ register_and_connect() {
   warp-cli --accept-tos connect || fail "warp-cli connect failed"
 
   log "verifying WARP proxy"
-  local trace
-  trace="$(curl --max-time 20 --socks5 127.0.0.1:40000 -fsSL https://www.cloudflare.com/cdn-cgi/trace || true)"
-  if ! printf '%s\n' "$trace" | grep -q '^warp=on$'; then
-    printf '%s\n' "$trace" >&2
-    fail "WARP verification failed: expected warp=on"
-  fi
+  local trace=""
+  local attempt
+  for attempt in $(seq 1 30); do
+    trace="$(curl --max-time 10 --socks5 127.0.0.1:40000 -fsSL https://www.cloudflare.com/cdn-cgi/trace || true)"
+    if printf '%s\n' "$trace" | grep -q '^warp=on$'; then
+      log "WARP proxy verified on attempt $attempt"
+      return 0
+    fi
+    sleep 2
+  done
+
+  printf '%s\n' "$trace" >&2
+  fail "WARP verification failed: expected warp=on via 127.0.0.1:40000"
 }
 
 main() {

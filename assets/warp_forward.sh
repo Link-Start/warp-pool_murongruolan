@@ -4,6 +4,7 @@ set -Eeuo pipefail
 ACTION="up"
 DEVICE=""
 CLIENT_ADDR=""
+SERVER_ADDR=""
 TRANSPARENT_PORT="14000"
 WARP_PROXY_HOST="127.0.0.1"
 WARP_PROXY_PORT="40000"
@@ -36,7 +37,7 @@ usage() {
 WarpPool WARP forwarding helper
 
 Usage:
-  bash warp_forward.sh action=up|down|status device=<wg-device> client_addr=<client-cidr> [transparent_port=14000] [--dry-run]
+  bash warp_forward.sh action=up|down|status device=<wg-device> client_addr=<client-cidr> [server_addr=<server-cidr>] [transparent_port=14000] [--dry-run]
 
 This script redirects TCP traffic entering the WireGuard device to a local
 sing-box redirect inbound, then sends it to Cloudflare WARP local proxy
@@ -57,6 +58,7 @@ parse_args() {
       action=*) ACTION="${arg#action=}" ;;
       device=*) DEVICE="${arg#device=}" ;;
       client_addr=*) CLIENT_ADDR="${arg#client_addr=}" ;;
+      server_addr=*) SERVER_ADDR="${arg#server_addr=}" ;;
       transparent_port=*) TRANSPARENT_PORT="${arg#transparent_port=}" ;;
       warp_proxy_host=*) WARP_PROXY_HOST="${arg#warp_proxy_host=}" ;;
       warp_proxy_port=*) WARP_PROXY_PORT="${arg#warp_proxy_port=}" ;;
@@ -123,6 +125,17 @@ validate_args() {
       fail "invalid IPv4 client address: $CLIENT_ADDR"
       ;;
   esac
+
+  if [ -n "$SERVER_ADDR" ]; then
+    REDIRECT_LISTEN="${SERVER_ADDR%%/*}"
+    case "$REDIRECT_LISTEN" in
+      *[!0-9.]*|"")
+        fail "invalid IPv4 server address: $SERVER_ADDR"
+        ;;
+    esac
+  else
+    REDIRECT_LISTEN="127.0.0.1"
+  fi
 
   case "$TRANSPARENT_PORT" in
     *[!0-9]*|"")
@@ -232,7 +245,7 @@ write_singbox_config() {
     {
       "type": "redirect",
       "tag": "wg-warp-redirect",
-      "listen": "127.0.0.1",
+      "listen": "$REDIRECT_LISTEN",
       "listen_port": $TRANSPARENT_PORT
     }
   ],
@@ -348,7 +361,7 @@ delete_iptables_rules() {
 }
 
 status() {
-  log "device=$DEVICE client=$CLIENT_IP transparent_port=$TRANSPARENT_PORT warp_proxy=$WARP_PROXY_HOST:$WARP_PROXY_PORT"
+  log "device=$DEVICE client=$CLIENT_IP redirect_listen=$REDIRECT_LISTEN transparent_port=$TRANSPARENT_PORT warp_proxy=$WARP_PROXY_HOST:$WARP_PROXY_PORT"
   if systemd_available; then
     systemctl is-active "$UNIT_NAME" 2>/dev/null || true
   elif [ -r "$PID_PATH" ]; then
