@@ -72,3 +72,39 @@ func TestPromptBoolDefaultAndSelection(t *testing.T) {
 		t.Fatalf("unexpected bool results: %v %v", first, second)
 	}
 }
+
+func TestPromptChineseMenuAndRequiredIntMessages(t *testing.T) {
+	var out bytes.Buffer
+	input := bufio.NewReader(bytes.NewBufferString("x\n2\n\n12345\n"))
+	p := promptIO{in: input, out: &out, language: "zh"}
+
+	got, err := p.askMenu("出口模式", "", "direct", []menuOption{
+		{Label: "direct", Value: "direct"},
+		{Label: "warp", Value: "warp"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "warp" {
+		t.Fatalf("unexpected menu value: %s", got)
+	}
+
+	port, err := p.askRequiredInt("本地代理端口", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port != 12345 {
+		t.Fatalf("unexpected port: %d", port)
+	}
+
+	text := out.String()
+	if !bytes.Contains([]byte(text), []byte("选择 [1]:")) {
+		t.Fatalf("missing chinese select prompt: %s", text)
+	}
+	if !bytes.Contains([]byte(text), []byte("无效选择")) {
+		t.Fatalf("missing chinese invalid selection: %s", text)
+	}
+	if !bytes.Contains([]byte(text), []byte("本地代理端口 为必填项")) {
+		t.Fatalf("missing chinese required message: %s", text)
+	}
+}

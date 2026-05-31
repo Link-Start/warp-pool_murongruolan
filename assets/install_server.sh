@@ -529,7 +529,7 @@ initialize_config() {
   fi
 
   if [ ! -f "$CONFIG_PATH" ]; then
-    "$bin" --config "$CONFIG_PATH" config init
+    "$bin" --config "$CONFIG_PATH" config init --language "$LANGUAGE"
   else
     log_i "config already exists, keeping: $CONFIG_PATH" "配置已存在，保留原配置：$CONFIG_PATH"
   fi

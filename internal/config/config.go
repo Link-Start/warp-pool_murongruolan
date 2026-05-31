@@ -22,6 +22,7 @@ const (
 
 type Config struct {
 	Version  int           `json:"version"`
+	Language string        `json:"language,omitempty"`
 	Listen   ListenConfig  `json:"listen"`
 	Defaults Defaults      `json:"defaults"`
 	Nodes    []Node        `json:"nodes"`
@@ -80,7 +81,8 @@ type DeployToken struct {
 
 func Default() Config {
 	return Config{
-		Version: 1,
+		Version:  1,
+		Language: "en",
 		Listen: ListenConfig{
 			Host:       "0.0.0.0",
 			PublicHost: "",
@@ -156,6 +158,10 @@ func Save(path string, cfg Config, force bool) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	if err := ValidateLanguage(cfg.Language); err != nil {
+		return err
+	}
+	cfg.Language = NormalizeLanguage(cfg.Language)
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -166,6 +172,26 @@ func Save(path string, cfg Config, force bool) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
+func NormalizeLanguage(language string) string {
+	switch language {
+	case "zh", "zh_CN", "zh-CN", "cn", "CN":
+		return "zh"
+	case "en", "en_US", "en-US", "english", "English", "":
+		return "en"
+	default:
+		return language
+	}
+}
+
+func ValidateLanguage(language string) error {
+	switch NormalizeLanguage(language) {
+	case "zh", "en":
+		return nil
+	default:
+		return fmt.Errorf("unsupported language %q, expected zh or en", language)
+	}
+}
+
 func SaveExisting(path string, cfg Config) error {
 	if path == "" {
 		path = DefaultPath()
@@ -174,6 +200,10 @@ func SaveExisting(path string, cfg Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	if err := ValidateLanguage(cfg.Language); err != nil {
+		return err
+	}
+	cfg.Language = NormalizeLanguage(cfg.Language)
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

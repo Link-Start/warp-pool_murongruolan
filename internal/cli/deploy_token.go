@@ -38,7 +38,7 @@ func newDeployTokenCreateCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			prompt := newPromptIO(cmd.OutOrStdout())
+			prompt := newPromptIOWithLanguage(cmd.OutOrStdout(), cfgLanguage(cfg))
 			if err := promptDeployTokenOptions(prompt, cfg, &node); err != nil {
 				return err
 			}
@@ -226,18 +226,19 @@ func shortDeployToken(value string) string {
 
 func promptDeployTokenOptions(prompt promptIO, cfg config.Config, node *config.Node) error {
 	var err error
-	node.Name, err = prompt.askRequired("Node name", node.Name)
+	language := prompt.language
+	node.Name, err = prompt.askRequired(tr(language, "Node name", "节点名称"), node.Name)
 	if err != nil {
 		return err
 	}
-	node.ExitMode, err = prompt.askMenu("Exit mode", node.ExitMode, defaultString(cfg.Defaults.ExitMode, config.ExitModeDirect), []menuOption{
+	node.ExitMode, err = prompt.askMenu(tr(language, "Exit mode", "出口模式"), node.ExitMode, defaultString(cfg.Defaults.ExitMode, config.ExitModeDirect), []menuOption{
 		{Label: "direct", Value: config.ExitModeDirect},
 		{Label: "warp", Value: config.ExitModeWarp},
 	})
 	if err != nil {
 		return err
 	}
-	node.Proxy, err = prompt.askMenu("Local proxy protocol", node.Proxy, defaultString(cfg.Defaults.Proxy, config.ProxyMixed), []menuOption{
+	node.Proxy, err = prompt.askMenu(tr(language, "Local proxy protocol", "本地代理协议"), node.Proxy, defaultString(cfg.Defaults.Proxy, config.ProxyMixed), []menuOption{
 		{Label: "mixed", Value: config.ProxyMixed},
 		{Label: "socks5", Value: config.ProxySocks5},
 		{Label: "http", Value: config.ProxyHTTP},

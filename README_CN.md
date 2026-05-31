@@ -140,6 +140,8 @@ wget -qO- ···
 5. 安装 sing-box。
 6. 创建 systemd 服务。
 
+安装时选择的语言会写入 WarpPool 配置。后续 `warppool deploy`、`warppool deploy-token`、`warppool uninstall` 等交互命令会使用同一种语言。
+
 
 非交互安装
 
@@ -164,7 +166,7 @@ WireGuard 端口分两类：
 - `wg-listen-port`：出口节点本机 WireGuard 监听端口，默认 `51820`。
 - `wg-endpoint-port`：主服务器连接出口节点时使用的公网端口。NAT VPS 做端口转发时，这个端口通常和节点本机监听端口不同。
 
-默认开启 SSH HostKey 校验。临时测试时可以显式跳过：
+默认开启 SSH HostKey 校验。如果交互部署时默认 `known_hosts` 文件不存在，WarpPool 会询问本次部署是否跳过 SSH HostKey 校验。非交互部署或临时测试时可以显式传入：
 
 ```bash
 warppool deploy \

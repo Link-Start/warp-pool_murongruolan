@@ -147,6 +147,8 @@ The installer will:
 5. Install sing-box.
 6. Create systemd services.
 
+The selected language is saved to the WarpPool config. Later interactive commands such as `warppool deploy`, `warppool deploy-token`, and `warppool uninstall` use the same language.
+
 Non-interactive installation:
 
 ```bash
@@ -180,7 +182,7 @@ WireGuard ports are split into two values:
 
 Push mode asks for the SSH port, the node-side WireGuard listen port, and the public WireGuard mapped port. NAT nodes commonly use non-standard SSH and UDP mapped ports, so enter the real forwarded ports from your provider.
 
-By default, SSH host key verification is enabled. For temporary tests only:
+By default, SSH host key verification is enabled. If the default `known_hosts` file does not exist during interactive deployment, WarpPool asks whether to skip SSH HostKey verification for this deployment. For non-interactive deployment or temporary tests, pass:
 
 ```bash
 warppool deploy \

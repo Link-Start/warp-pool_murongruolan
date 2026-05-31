@@ -19,6 +19,7 @@ func newConfigCommand() *cobra.Command {
 
 func newConfigInitCommand() *cobra.Command {
 	var force bool
+	var language string
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -30,6 +31,12 @@ func newConfigInitCommand() *cobra.Command {
 			}
 
 			cfg := config.Default()
+			if language != "" {
+				if err := config.ValidateLanguage(language); err != nil {
+					return err
+				}
+				cfg.Language = config.NormalizeLanguage(language)
+			}
 			if err := config.Save(path, cfg, force); err != nil {
 				return err
 			}
@@ -40,5 +47,6 @@ func newConfigInitCommand() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing config")
+	cmd.Flags().StringVar(&language, "language", "", "interactive language: zh or en")
 	return cmd
 }

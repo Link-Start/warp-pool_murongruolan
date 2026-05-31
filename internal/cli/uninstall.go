@@ -71,7 +71,11 @@ func newUninstallCommand() *cobra.Command {
 			}
 			opts.ConfigPath = resolvedConfigPath()
 			opts.Out = func(line string) { fmt.Fprintln(cmd.OutOrStdout(), line) }
-			opts.Prompt = newPromptIO(cmd.OutOrStdout())
+			language := "en"
+			if cfg, err := config.Load(opts.ConfigPath); err == nil {
+				language = cfgLanguage(cfg)
+			}
+			opts.Prompt = newPromptIOWithLanguage(cmd.OutOrStdout(), language)
 
 			if !opts.Force && !opts.DryRun {
 				return fmt.Errorf("refusing to uninstall without --force; use --dry-run to preview")
@@ -109,14 +113,14 @@ func uninstallAll(opts uninstallOptions) (uninstallResult, error) {
 	result := uninstallResult{}
 
 	if !opts.CleanWGSet {
-		cleanWG, err := opts.Prompt.askBool("Remove local WireGuard client configs and disable wg-quick services?", false, true)
+		cleanWG, err := opts.Prompt.askBool(tr(opts.Prompt.language, "Remove local WireGuard client configs and disable wg-quick services?", "删除本地 WireGuard 客户端配置并禁用 wg-quick 服务？"), false, true)
 		if err != nil {
 			return result, err
 		}
 		opts.CleanWG = cleanWG
 	}
 	if !opts.CleanProxySet {
-		cleanProxy, err := opts.Prompt.askBool("Remove local proxy/listener services and runtime state?", false, true)
+		cleanProxy, err := opts.Prompt.askBool(tr(opts.Prompt.language, "Remove local proxy/listener services and runtime state?", "删除本地代理/监听服务和运行状态？"), false, true)
 		if err != nil {
 			return result, err
 		}
