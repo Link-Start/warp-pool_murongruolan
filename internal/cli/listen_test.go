@@ -9,7 +9,7 @@ func TestRenderListenService(t *testing.T) {
 	service := renderListenService("/usr/local/bin/warppool", "/etc/warppool/config.json")
 	for _, want := range []string{
 		"Description=WarpPool Deploy Token Listener",
-		"ExecStart='/usr/local/bin/warppool' --config '/etc/warppool/config.json' listen start",
+		"ExecStart='/usr/local/bin/warppool' --config '/etc/warppool/config.json' listen run",
 		"Restart=on-failure",
 		"WantedBy=multi-user.target",
 	} {

@@ -25,6 +25,7 @@ func newListenCommand() *cobra.Command {
 	}
 
 	cmd.AddCommand(newListenConfigCommand())
+	cmd.AddCommand(newListenRunCommand())
 	cmd.AddCommand(newListenStartCommand())
 	cmd.AddCommand(newListenStopCommand())
 	cmd.AddCommand(newListenStatusCommand())
@@ -75,83 +76,121 @@ func newListenConfigCommand() *cobra.Command {
 }
 
 func newListenStartCommand() *cobra.Command {
-	var publicHost string
-
 	cmd := &cobra.Command{
 		Use:   "start",
-		Short: "Start registration listener",
+		Short: "Start registration listener service",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := resolvedConfigPath()
 			cfg, err := config.Load(path)
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			if err := config.CheckPortAvailable(cfg.Listen.Host, cfg.Listen.Port); err != nil {
+			if runtime.GOOS != "linux" {
+				return runListenForeground(cmd, "")
+			}
+			if err := ensureListenServiceInstalled(path); err != nil {
 				return err
 			}
-
+			if err := runSystemctl("enable", "--now", "warppool-listen.service"); err != nil {
+				return err
+			}
 			cfg = config.SetListenEnabled(cfg, true)
 			if err := config.SaveExisting(path, cfg); err != nil {
 				return fmt.Errorf("save config: %w", err)
 			}
-
-			addr := net.JoinHostPort(cfg.Listen.Host, fmt.Sprintf("%d", cfg.Listen.Port))
-			srv := &http.Server{
-				Addr:              addr,
-				Handler:           server.RegisterHandler(path),
-				ReadHeaderTimeout: 10 * time.Second,
-			}
-
-			if publicHost == "" {
-				publicHost = cfg.Listen.PublicHost
-			}
+			publicHost := cfg.Listen.PublicHost
 			if publicHost == "" {
 				publicHost = cfg.Listen.Host
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "registration listener started: %s\n", listenURL(publicHost, cfg.Listen.Port))
-			fmt.Fprintln(cmd.OutOrStdout(), "press Ctrl+C to stop")
-
-			errCh := make(chan error, 1)
-			go func() {
-				if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-					errCh <- err
-					return
-				}
-				errCh <- nil
-			}()
-
-			sigCh := make(chan os.Signal, 1)
-			signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-
-			select {
-			case sig := <-sigCh:
-				fmt.Fprintf(cmd.OutOrStdout(), "received signal: %s\n", sig)
-			case err := <-errCh:
-				if err != nil {
-					return err
-				}
-			case <-watchListenStop(path, 1*time.Second):
-				fmt.Fprintln(cmd.OutOrStdout(), "listener stop requested")
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := srv.Shutdown(ctx); err != nil {
-				return fmt.Errorf("shutdown listener: %w", err)
-			}
-
-			cfg, err = config.Load(path)
-			if err == nil {
-				cfg = config.SetListenEnabled(cfg, false)
-				_ = config.SaveExisting(path, cfg)
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), "registration listener stopped")
+			fmt.Fprintf(cmd.OutOrStdout(), "registration listener service started: %s\n", listenURL(publicHost, cfg.Listen.Port))
+			fmt.Fprintln(cmd.OutOrStdout(), "stop it with: warppool listen stop")
 			return nil
 		},
 	}
 
+	return cmd
+}
+
+func newListenRunCommand() *cobra.Command {
+	var publicHost string
+	cmd := &cobra.Command{
+		Use:   "run",
+		Short: "Run registration listener in foreground",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runListenForeground(cmd, publicHost)
+		},
+	}
 	cmd.Flags().StringVar(&publicHost, "public-host", "", "public host/IP used in generated install command")
 	return cmd
+}
+
+func runListenForeground(cmd *cobra.Command, publicHost string) error {
+	path := resolvedConfigPath()
+	cfg, err := config.Load(path)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	if err := config.CheckPortAvailable(cfg.Listen.Host, cfg.Listen.Port); err != nil {
+		return err
+	}
+
+	cfg = config.SetListenEnabled(cfg, true)
+	if err := config.SaveExisting(path, cfg); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+
+	addr := net.JoinHostPort(cfg.Listen.Host, fmt.Sprintf("%d", cfg.Listen.Port))
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           server.RegisterHandler(path),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	if publicHost == "" {
+		publicHost = cfg.Listen.PublicHost
+	}
+	if publicHost == "" {
+		publicHost = cfg.Listen.Host
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "registration listener started: %s\n", listenURL(publicHost, cfg.Listen.Port))
+	fmt.Fprintln(cmd.OutOrStdout(), "press Ctrl+C to stop")
+
+	errCh := make(chan error, 1)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+			return
+		}
+		errCh <- nil
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case sig := <-sigCh:
+		fmt.Fprintf(cmd.OutOrStdout(), "received signal: %s\n", sig)
+	case err := <-errCh:
+		if err != nil {
+			return err
+		}
+	case <-watchListenStop(path, 1*time.Second):
+		fmt.Fprintln(cmd.OutOrStdout(), "listener stop requested")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		return fmt.Errorf("shutdown listener: %w", err)
+	}
+
+	cfg, err = config.Load(path)
+	if err == nil {
+		cfg = config.SetListenEnabled(cfg, false)
+		_ = config.SaveExisting(path, cfg)
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "registration listener stopped")
+	return nil
 }
 
 func watchListenStop(configPath string, interval time.Duration) <-chan struct{} {
@@ -177,12 +216,15 @@ func watchListenStop(configPath string, interval time.Duration) <-chan struct{} 
 func newListenStopCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "stop",
-		Short: "Mark registration listener as stopped",
+		Short: "Stop registration listener service",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := resolvedConfigPath()
 			cfg, err := config.Load(path)
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
+			}
+			if runtime.GOOS == "linux" {
+				_ = runSystemctl("disable", "--now", "warppool-listen.service")
 			}
 
 			cfg = config.SetListenEnabled(cfg, false)
@@ -190,7 +232,7 @@ func newListenStopCommand() *cobra.Command {
 				return fmt.Errorf("save config: %w", err)
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), "registration listener marked stopped")
+			fmt.Fprintln(cmd.OutOrStdout(), "registration listener stopped")
 			return nil
 		},
 	}
@@ -252,8 +294,8 @@ func newListenServiceInstallCommand() *cobra.Command {
 			if runtime.GOOS != "linux" {
 				return fmt.Errorf("systemd service installation is only supported on Linux")
 			}
-			if unitPath == "" {
-				unitPath = "/etc/systemd/system/warppool-listen.service"
+			if unitPath != "" && unitPath != "/etc/systemd/system/warppool-listen.service" {
+				return fmt.Errorf("custom listener unit path is not supported by start/stop yet: %s", unitPath)
 			}
 			if warppoolBin == "" {
 				bin, err := os.Executable()
@@ -263,6 +305,7 @@ func newListenServiceInstallCommand() *cobra.Command {
 				warppoolBin = bin
 			}
 
+			unitPath = "/etc/systemd/system/warppool-listen.service"
 			service := renderListenService(warppoolBin, resolvedConfigPath())
 			if err := os.WriteFile(unitPath, []byte(service), 0o644); err != nil {
 				return fmt.Errorf("write systemd service %s: %w", unitPath, err)
@@ -283,13 +326,25 @@ func newListenServiceInstallCommand() *cobra.Command {
 func newListenServiceEnableCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "enable",
-		Short: "Enable Deploy Token listener on boot",
+		Short: "Enable and start Deploy Token listener",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if runtime.GOOS != "linux" {
 				return fmt.Errorf("systemd service is only supported on Linux")
 			}
-			if err := runSystemctl("enable", "warppool-listen.service"); err != nil {
+			path := resolvedConfigPath()
+			cfg, err := config.Load(path)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			if err := ensureListenServiceInstalled(path); err != nil {
 				return err
+			}
+			if err := runSystemctl("enable", "--now", "warppool-listen.service"); err != nil {
+				return err
+			}
+			cfg = config.SetListenEnabled(cfg, true)
+			if err := config.SaveExisting(path, cfg); err != nil {
+				return fmt.Errorf("save config: %w", err)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "enabled service: warppool-listen.service")
 			return nil
@@ -301,13 +356,22 @@ func newListenServiceEnableCommand() *cobra.Command {
 func newListenServiceDisableCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "disable",
-		Short: "Disable Deploy Token listener on boot",
+		Short: "Disable and stop Deploy Token listener",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if runtime.GOOS != "linux" {
 				return fmt.Errorf("systemd service is only supported on Linux")
 			}
-			if err := runSystemctl("disable", "warppool-listen.service"); err != nil {
+			path := resolvedConfigPath()
+			cfg, err := config.Load(path)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			if err := runSystemctl("disable", "--now", "warppool-listen.service"); err != nil {
 				return err
+			}
+			cfg = config.SetListenEnabled(cfg, false)
+			if err := config.SaveExisting(path, cfg); err != nil {
+				return fmt.Errorf("save config: %w", err)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "disabled service: warppool-listen.service")
 			return nil
@@ -324,13 +388,29 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%s --config %s listen start
+ExecStart=%s --config %s listen run
 Restart=on-failure
 RestartSec=3s
 
 [Install]
 WantedBy=multi-user.target
 `, systemdEscapeArg(warppoolBin), systemdEscapeArg(configPath))
+}
+
+func ensureListenServiceInstalled(configPath string) error {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+	unitPath := "/etc/systemd/system/warppool-listen.service"
+	bin, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("detect warppool executable: %w", err)
+	}
+	service := renderListenService(bin, configPath)
+	if err := os.WriteFile(unitPath, []byte(service), 0o644); err != nil {
+		return fmt.Errorf("write systemd service %s: %w", unitPath, err)
+	}
+	return runSystemctl("daemon-reload")
 }
 
 func systemdEscapeArg(value string) string {

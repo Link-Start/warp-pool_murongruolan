@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,6 +26,7 @@ type PrepareRequest struct {
 	ServerPrivateKey string `json:"server_private_key"`
 	ServerPublicKey  string `json:"server_public_key"`
 	ListenPort       int    `json:"listen_port"`
+	Mode             string `json:"mode,omitempty"`
 }
 
 type PrepareResponse struct {
@@ -76,6 +80,9 @@ func RegisterHandler(configPath string) http.Handler {
 		}
 
 		node := token.Node
+		if req.Mode != "" {
+			node.ExitMode = req.Mode
+		}
 		if node.ExitMode == "" {
 			node.ExitMode = cfg.Defaults.ExitMode
 		}
@@ -144,6 +151,7 @@ func RegisterHandler(configPath string) http.Handler {
 			writeJSON(w, http.StatusBadRequest, RegisterResponse{OK: false, Message: "token is required"})
 			return
 		}
+		autostartDisabled := r.URL.Query().Get("autostart") == "0"
 
 		cfg, err := config.Load(configPath)
 		if err != nil {
@@ -156,10 +164,22 @@ func RegisterHandler(configPath string) http.Handler {
 			writeJSON(w, http.StatusBadRequest, RegisterResponse{OK: false, Message: err.Error()})
 			return
 		}
+		var completedToken config.DeployToken
+		for _, item := range cfg.Tokens {
+			if item.Token == req.Token {
+				completedToken = item
+				break
+			}
+		}
 		if err := config.SaveExisting(configPath, cfg); err != nil {
 			writeJSON(w, http.StatusInternalServerError, RegisterResponse{OK: false, Message: "save config failed"})
 			fmt.Printf("[WarpPool][register][ERROR] save config: %v\n", err)
 			return
+		}
+		if completedToken.AutoStart && !autostartDisabled {
+			if err := spawnProxyAutostart(configPath, node.Name); err != nil {
+				fmt.Printf("[WarpPool][register][WARN] auto start proxy watcher for %s failed: %v\n", node.Name, err)
+			}
 		}
 
 		writeJSON(w, http.StatusOK, RegisterResponse{OK: true, Message: "registered", Node: node})
@@ -228,9 +248,67 @@ func writePrepareShell(w http.ResponseWriter, status int, value PrepareResponse)
 	fmt.Fprintf(w, "WG_DEVICE_B64=%s\n", shellB64(value.Node.WGDevice))
 	fmt.Fprintf(w, "WG_SERVER_ADDR_B64=%s\n", shellB64(value.Node.WGServerAddress))
 	fmt.Fprintf(w, "WG_CLIENT_ADDR_B64=%s\n", shellB64(value.Node.WGClientAddress))
+	fmt.Fprintf(w, "NODE_EXIT_MODE_B64=%s\n", shellB64(value.Node.ExitMode))
 	fmt.Fprintf(w, "SERVER_CONFIG_B64=%s\n", shellB64(value.ServerConfig))
 }
 
 func shellB64(value string) string {
 	return base64.StdEncoding.EncodeToString([]byte(value))
+}
+
+var execCommand = exec.Command
+
+func spawnProxyAutostart(configPath string, nodeName string) error {
+	if execCommand == nil {
+		return nil
+	}
+	if !filepath.IsAbs(configPath) {
+		if abs, err := filepath.Abs(configPath); err == nil {
+			configPath = abs
+		}
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("detect warppool executable: %w", err)
+	}
+	stateDir := "/var/lib/warppool"
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		return err
+	}
+	logPath := filepath.Join(stateDir, "autostart-"+safeFilePart(nodeName)+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+
+	cmd := execCommand(exe, "--config", configPath, "deploy-token", "wait-start", nodeName)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Stdin = nil
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
+
+func safeFilePart(value string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(value) {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			if b.Len() > 0 {
+				b.WriteRune('-')
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "node"
+	}
+	return out
 }

@@ -243,6 +243,7 @@ func TestPrepareAndCompleteDeployToken(t *testing.T) {
 	cfg, err := AddDeployToken(cfg, DeployToken{
 		Token:     "token-1",
 		ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		AutoStart: true,
 		Node: Node{
 			Name:      "nat1",
 			ExitMode:  ExitModeDirect,
@@ -275,6 +276,9 @@ func TestPrepareAndCompleteDeployToken(t *testing.T) {
 	}
 	if len(next.Nodes) != 1 || !next.Tokens[0].Used || !next.Tokens[0].Registered {
 		t.Fatalf("unexpected completed config: %#v", next)
+	}
+	if !next.Tokens[0].AutoStart {
+		t.Fatal("expected autostart flag preserved")
 	}
 }
 

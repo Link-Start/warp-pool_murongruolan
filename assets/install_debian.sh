@@ -8,6 +8,7 @@ ENDPOINT=""
 WG_LISTEN_PORT="51820"
 WG_ENDPOINT_PORT=""
 DRY_RUN="false"
+NODE_EXIT_MODE=""
 
 log() {
   printf '[WarpPool][debian] %s\n' "$*"
@@ -56,7 +57,18 @@ install_packages() {
   run env DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard wireguard-tools iproute2 iptables curl ca-certificates gnupg coreutils
 }
 
-configure_wireguard_placeholder() {
+validate_wireguard_ports() {
+  case "$WG_LISTEN_PORT" in
+    ""|*[!0-9]*) fail "invalid wg_listen_port: $WG_LISTEN_PORT" ;;
+  esac
+  if [ -n "$WG_ENDPOINT_PORT" ]; then
+    case "$WG_ENDPOINT_PORT" in
+      *[!0-9]*) fail "invalid wg_endpoint_port: $WG_ENDPOINT_PORT" ;;
+    esac
+  fi
+}
+
+log_wireguard_ready() {
   log "WireGuard package installed; config generation will be handled by WarpPool deploy flow"
 }
 
@@ -129,6 +141,7 @@ load_prepare_response() {
   WG_DEVICE_B64=""
   WG_SERVER_ADDR_B64=""
   WG_CLIENT_ADDR_B64=""
+  NODE_EXIT_MODE_B64=""
   SERVER_CONFIG_B64=""
   eval "$response"
   if [ "$OK" != "1" ]; then
@@ -138,6 +151,8 @@ load_prepare_response() {
   WG_DEVICE="$(printf '%s' "$WG_DEVICE_B64" | decode_b64)"
   WG_SERVER_ADDR="$(printf '%s' "$WG_SERVER_ADDR_B64" | decode_b64)"
   WG_CLIENT_ADDR="$(printf '%s' "$WG_CLIENT_ADDR_B64" | decode_b64)"
+  NODE_EXIT_MODE="$(printf '%s' "$NODE_EXIT_MODE_B64" | decode_b64)"
+  [ -z "$NODE_EXIT_MODE" ] || MODE="$NODE_EXIT_MODE"
 }
 
 write_remote_config() {
@@ -228,7 +243,7 @@ enable_direct_forwarding() {
   iptables -t nat -C POSTROUTING -s "$client_ip/32" -o "$egress" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s "$client_ip/32" -o "$egress" -j MASQUERADE
 }
 
-register_node_placeholder() {
+register_node() {
   if [ -z "$TOKEN" ] && [ -z "$SERVER" ]; then
     return 0
   fi
@@ -245,7 +260,7 @@ register_node_placeholder() {
   response="$(curl -fsS \
     -X POST \
     -H 'Content-Type: application/json' \
-    -d "{\"token\":\"$TOKEN\",\"endpoint\":\"$ENDPOINT\",\"endpoint_port\":$WG_ENDPOINT_PORT,\"server_private_key\":\"$SERVER_PRIVATE_KEY\",\"server_public_key\":\"$SERVER_PUBLIC_KEY\",\"listen_port\":$WG_LISTEN_PORT}" \
+    -d "{\"token\":\"$TOKEN\",\"endpoint\":\"$ENDPOINT\",\"endpoint_port\":$WG_ENDPOINT_PORT,\"server_private_key\":\"$SERVER_PRIVATE_KEY\",\"server_public_key\":\"$SERVER_PUBLIC_KEY\",\"listen_port\":$WG_LISTEN_PORT,\"mode\":\"$MODE\"}" \
     "$SERVER/register/prepare?format=sh")" || fail "register prepare failed"
   write_remote_config "$response"
   start_remote_wireguard
@@ -257,16 +272,17 @@ register_node_placeholder() {
     -H 'Content-Type: application/json' \
     -d "{\"token\":\"$TOKEN\"}" \
     "$SERVER/register/complete" >/dev/null
-  log "node auto registration completed; run 'warppool wg up <node>' and 'warppool proxy service enable' on the main server"
+  log "node auto registration completed; local proxy service should start automatically on the main server"
 }
 
 main() {
   parse_args "$@"
+  validate_wireguard_ports
   install_packages
-  configure_wireguard_placeholder
+  log_wireguard_ready
   install_node_uninstaller
   maybe_install_warp
-  register_node_placeholder
+  register_node
   if [ -z "$TOKEN" ] && [ -z "$SERVER" ]; then
     log "node dependencies installed only; no main server registration was performed"
     log "to auto-register later, run 'warppool deploy-token' on the main server and execute the generated command on this node"

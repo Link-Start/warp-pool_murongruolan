@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -9,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"text/tabwriter"
@@ -16,7 +16,6 @@ import (
 
 	"github.com/murongruolan/warp-pool/internal/config"
 	"github.com/murongruolan/warp-pool/internal/singbox"
-	"github.com/murongruolan/warp-pool/internal/wgclient"
 	"github.com/spf13/cobra"
 )
 
@@ -131,37 +130,16 @@ func newSpeedtestCommand() *cobra.Command {
 
 func newShowCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "show <node>",
-		Short: "Show node details with local runtime status",
-		Args:  cobra.ExactArgs(1),
+		Use:    "show <node>",
+		Short:  "Show node details with local runtime status",
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, node, err := loadConfigAndNode(resolvedConfigPath(), args[0])
 			if err != nil {
 				return err
 			}
-			_ = cfg
-
-			payload := map[string]any{
-				"node": redactNode(node),
-			}
-			if status, err := wgclient.GetStatus(node, wgclient.Options{}); err == nil {
-				payload["wireguard_active"] = status.Active
-				payload["wireguard_status"] = status.Output
-			} else {
-				payload["wireguard_error"] = err.Error()
-			}
-			if status, err := singbox.Status(singbox.ManagerOptions{}); err == nil {
-				payload["proxy_running"] = status.Running
-				payload["proxy_status"] = status.Message
-			} else {
-				payload["proxy_error"] = err.Error()
-			}
-			data, err := json.MarshalIndent(payload, "", "  ")
-			if err != nil {
-				return err
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), string(data))
-			return nil
+			return printNodeDetails(cmd.OutOrStdout(), cfgLanguage(cfg), node, true)
 		},
 	}
 	return cmd
@@ -192,19 +170,57 @@ func redactWireGuardConfig(value string) string {
 }
 
 func newUpgradeCommand() *cobra.Command {
-	var assetsDir string
+	var scriptPath string
+	var versionArg string
+	var yes bool
+	var dryRun bool
 	cmd := &cobra.Command{
 		Use:   "upgrade",
-		Short: "Print or run local upgrade helper",
+		Short: "Upgrade WarpPool binary and bundled assets",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path := assetsDir + string(os.PathSeparator) + "upgrade.sh"
-			fmt.Fprintf(cmd.OutOrStdout(), "upgrade helper: %s\n", path)
-			fmt.Fprintln(cmd.OutOrStdout(), "binary release upgrade flow will be finalized in release stage")
-			return nil
+			if runtime.GOOS != "linux" {
+				return fmt.Errorf("upgrade is currently supported only on Linux")
+			}
+			if scriptPath == "" {
+				scriptPath = resolveUpgradeScript()
+			}
+			if _, err := os.Stat(scriptPath); err != nil {
+				return fmt.Errorf("upgrade helper not found: %s: %w", scriptPath, err)
+			}
+			argv := []string{scriptPath}
+			if versionArg != "" {
+				argv = append(argv, "--version", versionArg)
+			}
+			if yes {
+				argv = append(argv, "--yes")
+			}
+			if dryRun {
+				argv = append(argv, "--dry-run")
+			}
+			c := exec.Command("bash", argv...)
+			c.Stdout = cmd.OutOrStdout()
+			c.Stderr = cmd.ErrOrStderr()
+			c.Stdin = os.Stdin
+			return c.Run()
 		},
 	}
-	cmd.Flags().StringVar(&assetsDir, "assets-dir", "assets", "assets directory")
+	cmd.Flags().StringVar(&scriptPath, "script", "", "upgrade helper script path")
+	cmd.Flags().StringVar(&versionArg, "version", "", "release version: latest or vX.Y.Z")
+	cmd.Flags().BoolVar(&yes, "yes", false, "run without confirmation")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print upgrade actions without changing files")
 	return cmd
+}
+
+func resolveUpgradeScript() string {
+	if candidate := filepath.Join(resolveAssetsDir(""), "upgrade.sh"); fileExistsLocal(candidate) {
+		return candidate
+	}
+	return filepath.Join("/usr/local/lib/warppool/assets", "upgrade.sh")
+}
+
+func fileExistsLocal(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func printCheck(w *tabwriter.Writer, name string, ok bool, detail string) {

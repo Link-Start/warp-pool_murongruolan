@@ -27,9 +27,11 @@ func defaultInputReader() io.Reader {
 
 func NewRootCommand() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "warppool",
-		Short: "WarpPool manages WireGuard based exit nodes",
-		Long:  "WarpPool manages WireGuard based exit nodes with optional Cloudflare WARP egress.",
+		Use:           "warppool",
+		Short:         "WarpPool manages WireGuard based exit nodes",
+		Long:          "WarpPool manages WireGuard based exit nodes with optional Cloudflare WARP egress.",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
 
 	root.PersistentFlags().StringVar(&configPath, "config", "", "config file path")

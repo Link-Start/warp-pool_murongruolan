@@ -50,6 +50,13 @@ func TestRedactNodeHidesPrivateKey(t *testing.T) {
 	}
 }
 
+func TestResolveUpgradeScriptPrefersAssets(t *testing.T) {
+	got := resolveUpgradeScript()
+	if got == "" {
+		t.Fatal("expected upgrade script path")
+	}
+}
+
 func hasDoctorCheck(checks []DoctorCheck, name string) bool {
 	for _, check := range checks {
 		if check.Name == name {
