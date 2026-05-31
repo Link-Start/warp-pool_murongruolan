@@ -81,7 +81,7 @@ func Start(data []byte, opts ManagerOptions) (StartResult, error) {
 
 	pid, err := opts.Runner.StartBackground(opts.Binary, "run", "-c", opts.ConfigPath)
 	if err != nil {
-		return StartResult{}, fmt.Errorf("start sing-box using %q: %w; put sing-box in bundled bin/ directory or pass --singbox-bin", opts.Binary, err)
+		return StartResult{}, fmt.Errorf("start sing-box using %q: %w; install sing-box to /usr/local/lib/warppool/bin, put it in bundled bin/ directory, or pass --singbox-bin", opts.Binary, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(opts.PIDPath), 0o755); err != nil {
 		return StartResult{}, err
@@ -213,12 +213,34 @@ func ResolveBinary(bundleDir string, runtimeOS string) string {
 		}
 	}
 
+	for _, dir := range systemBinaryDirs(runtimeOS) {
+		candidate := filepath.Join(dir, name)
+		if fileExists(candidate) {
+			return candidate
+		}
+	}
+
 	return "sing-box"
 }
 
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func systemBinaryDirs(runtimeOS string) []string {
+	switch runtimeOS {
+	case "windows":
+		base := os.Getenv("ProgramFiles")
+		if base == "" {
+			return nil
+		}
+		return []string{filepath.Join(base, "WarpPool", "bin")}
+	case "linux":
+		return []string{"/usr/local/lib/warppool/bin"}
+	default:
+		return nil
+	}
 }
 
 func defaultStateDir() string {

@@ -134,7 +134,14 @@ func TestResolveBinaryPrefersBundleDir(t *testing.T) {
 }
 
 func TestResolveBinaryFallsBackToPath(t *testing.T) {
-	if got := ResolveBinary(filepath.Join(t.TempDir(), "missing"), "linux"); got != "sing-box" {
+	if got := ResolveBinary(filepath.Join(t.TempDir(), "missing"), "darwin"); got != "sing-box" {
 		t.Fatalf("expected PATH fallback, got %s", got)
+	}
+}
+
+func TestSystemBinaryDirsIncludesWarpPoolInstallDir(t *testing.T) {
+	dirs := systemBinaryDirs("linux")
+	if len(dirs) != 1 || dirs[0] != "/usr/local/lib/warppool/bin" {
+		t.Fatalf("unexpected linux system dirs: %#v", dirs)
 	}
 }

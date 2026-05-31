@@ -131,6 +131,6 @@ func newProxyStatusCommand() *cobra.Command {
 func addProxyManagerFlags(cmd *cobra.Command, opts *singbox.ManagerOptions) {
 	cmd.Flags().StringVar(&opts.ConfigPath, "singbox-config", "", "sing-box config path")
 	cmd.Flags().StringVar(&opts.PIDPath, "pid-file", "", "sing-box pid file path")
-	cmd.Flags().StringVar(&opts.Binary, "singbox-bin", "", "sing-box binary path; defaults to bundled bin/sing-box")
+	cmd.Flags().StringVar(&opts.Binary, "singbox-bin", "", "sing-box binary path; defaults to bundled bin/sing-box or /usr/local/lib/warppool/bin/sing-box")
 	cmd.Flags().StringVar(&opts.BundleDir, "singbox-bundle-dir", "", "directory containing bundled sing-box binary")
 }
