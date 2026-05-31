@@ -72,6 +72,12 @@ func TestBuildUsesLocalEndpointNameFallback(t *testing.T) {
 	}
 }
 
+func TestInboundTag(t *testing.T) {
+	if got := InboundTag("US1"); got != "in-us1" {
+		t.Fatalf("unexpected inbound tag: %s", got)
+	}
+}
+
 func TestBuildRejectsMissingWireGuardFields(t *testing.T) {
 	cfg := config.Default()
 	node := testNode()

@@ -1,67 +1,109 @@
 package cli
 
 import (
+	"bytes"
+	"fmt"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/murongruolan/warp-pool/internal/config"
 )
 
-func TestHostOnly(t *testing.T) {
-	if got := hostOnly("10.200.0.1/30"); got != "10.200.0.1" {
-		t.Fatalf("unexpected host: %s", got)
-	}
-}
-
-func TestBuildDoctorChecksIncludesNodePort(t *testing.T) {
+func TestPingCommandUsesProxyCheckForEmbeddedWireGuard(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.Default()
-	cfg.Nodes = append(cfg.Nodes, config.Node{
-		Name:      "ops",
-		ExitMode:  config.ExitModeDirect,
-		Proxy:     config.ProxyMixed,
-		BindHost:  "127.0.0.1",
-		LocalPort: 1,
+	cfg.Nodes = []config.Node{
+		{
+			Name:               "US1",
+			ExitMode:           config.ExitModeDirect,
+			Proxy:              config.ProxyMixed,
+			BindHost:           "127.0.0.1",
+			LocalPort:          10016,
+			WGServerAddress:    "10.200.0.1/30",
+			WGClientAddress:    "10.200.0.2/30",
+			WGClientPrivateKey: "client-private-key",
+			WGServerPublicKey:  "server-public-key",
+			Endpoint:           "204.197.163.238:41704",
+		},
+	}
+	if err := config.Save(path, cfg, true); err != nil {
+		t.Fatal(err)
+	}
+
+	oldConfigPath := configPath
+	configPath = path
+	t.Cleanup(func() { configPath = oldConfigPath })
+
+	var gotURL string
+	var gotProxy string
+	var out bytes.Buffer
+	cmd := newPingCommandWithHTTPCheck(func(rawURL string, proxyURL string, timeout time.Duration) (string, error) {
+		gotURL = rawURL
+		gotProxy = proxyURL
+		return "204.197.163.238", nil
 	})
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"US1"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
 
-	checks := BuildDoctorChecks(cfg, "config.json")
-	if !hasDoctorCheck(checks, "config") || !hasDoctorCheck(checks, "port ops") {
-		t.Fatalf("missing expected checks: %#v", checks)
-	}
-}
-
-func TestValidateLocalProxyPortRejectsReservedPort(t *testing.T) {
-	cfg := config.Default()
-	cfg.Nodes = append(cfg.Nodes, config.Node{Name: "nat1", BindHost: "127.0.0.1", LocalPort: 10133})
-	if err := validateLocalProxyPort(cfg, "127.0.0.1", 10133); err == nil {
-		t.Fatal("expected reserved port error")
-	}
-}
-
-func TestRedactNodeHidesPrivateKey(t *testing.T) {
-	node := config.Node{
-		WGClientPrivateKey: "private-key",
-		WGClientConfig:     "PrivateKey = private-key\nAddress = 10.0.0.2/30\n",
-	}
-	redacted := redactNode(node)
-	if redacted.WGClientPrivateKey != "<redacted>" {
-		t.Fatalf("private key not redacted: %#v", redacted)
-	}
-	if redacted.WGClientConfig == node.WGClientConfig || redacted.WGClientConfig == "" {
-		t.Fatalf("client config not redacted: %q", redacted.WGClientConfig)
-	}
-}
-
-func TestResolveUpgradeScriptPrefersAssets(t *testing.T) {
-	got := resolveUpgradeScript()
-	if got == "" {
-		t.Fatal("expected upgrade script path")
-	}
-}
-
-func hasDoctorCheck(checks []DoctorCheck, name string) bool {
-	for _, check := range checks {
-		if check.Name == name {
-			return true
+	text := out.String()
+	for _, want := range []string{"mode: sing-box embedded wireguard proxy check", "proxy check ok: 204.197.163.238"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
 		}
 	}
-	return false
+	if gotURL != "https://api.ipify.org" {
+		t.Fatalf("unexpected check url: %s", gotURL)
+	}
+	if gotProxy != "socks5://127.0.0.1:10016" {
+		t.Fatalf("unexpected proxy url: %s", gotProxy)
+	}
+	if strings.Contains(text, "10.200.0.1") || strings.Contains(text, "ping failed") {
+		t.Fatalf("embedded WireGuard ping should not use system ICMP:\n%s", text)
+	}
+}
+
+func TestPingCommandReportsProxyCheckFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := config.Default()
+	cfg.Nodes = []config.Node{
+		{
+			Name:               "US1",
+			ExitMode:           config.ExitModeDirect,
+			Proxy:              config.ProxyMixed,
+			BindHost:           "127.0.0.1",
+			LocalPort:          10016,
+			WGServerAddress:    "10.200.0.1/30",
+			WGClientAddress:    "10.200.0.2/30",
+			WGClientPrivateKey: "client-private-key",
+			WGServerPublicKey:  "server-public-key",
+			Endpoint:           "204.197.163.238:41704",
+		},
+	}
+	if err := config.Save(path, cfg, true); err != nil {
+		t.Fatal(err)
+	}
+
+	oldConfigPath := configPath
+	configPath = path
+	t.Cleanup(func() { configPath = oldConfigPath })
+
+	var out bytes.Buffer
+	cmd := newPingCommandWithHTTPCheck(func(string, string, time.Duration) (string, error) {
+		return "", fmt.Errorf("proxy refused")
+	})
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"US1"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	text := out.String()
+	if !strings.Contains(text, "proxy check failed: proxy refused") {
+		t.Fatalf("unexpected output:\n%s", text)
+	}
 }

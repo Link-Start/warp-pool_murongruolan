@@ -147,7 +147,8 @@ func newNodeStartCommand() *cobra.Command {
 			if err := startProxyForNode(path, cfg, node); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "started local proxy service for node: %s\n", args[0])
+			language := cfgLanguage(cfg)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", tr(language, "started local proxy service for node: "+args[0], "已启动节点本地代理服务："+args[0]))
 			return nil
 		},
 	}
@@ -205,7 +206,11 @@ func printNodeDetails(out interface{ Write([]byte) (int, error) }, language stri
 	printNodeField(w, language, "public_ip", "公网IP", node.PublicIP)
 	printNodeField(w, language, "country", "地区", node.Country)
 	printNodeField(w, language, "wg_device", "远端 WireGuard 设备", node.WGDevice)
-	printNodeField(w, language, "wg_local_device", "本地 WireGuard 设备", defaultIfEmpty(node.WGLocalDevice, wgclient.DefaultLocalDeviceName(node.Name)))
+	if nodeUsesSystemWireGuard(node) {
+		printNodeField(w, language, "wg_local_device", "本地 WireGuard 设备", defaultIfEmpty(node.WGLocalDevice, wgclient.DefaultLocalDeviceName(node.Name)))
+	} else {
+		printNodeField(w, language, "wg_local_endpoint", "本地 WireGuard endpoint", singbox.DefaultEndpointName(node))
+	}
 	printNodeField(w, language, "wg_server_address", "WireGuard 服务端地址", node.WGServerAddress)
 	printNodeField(w, language, "wg_client_address", "WireGuard 客户端地址", node.WGClientAddress)
 	printNodeField(w, language, "wg_listen_port", "WireGuard 监听端口", intString(node.WGListenPort))
@@ -214,13 +219,19 @@ func printNodeDetails(out interface{ Write([]byte) (int, error) }, language stri
 	printNodeField(w, language, "last_updated", "更新时间", node.LastUpdated)
 
 	if includeRuntime {
-		if status, err := wgclient.GetStatus(node, wgclient.Options{}); err == nil {
-			printNodeField(w, language, "wireguard_active", "WireGuard 已启动", fmt.Sprintf("%t", status.Active))
-			if strings.TrimSpace(status.Output) != "" {
-				printNodeField(w, language, "wireguard_status", "WireGuard 状态", compactMultiline(status.Output))
+		if nodeUsesSystemWireGuard(node) {
+			printNodeField(w, language, "wireguard_runtime", "WireGuard 运行方式", "system wg-quick")
+			if status, err := wgclient.GetStatus(node, wgclient.Options{}); err == nil {
+				printNodeField(w, language, "wireguard_active", "WireGuard 已启动", fmt.Sprintf("%t", status.Active))
+				if strings.TrimSpace(status.Output) != "" {
+					printNodeField(w, language, "wireguard_status", "WireGuard 状态", compactMultiline(status.Output))
+				}
+			} else {
+				printNodeField(w, language, "wireguard_error", "WireGuard 错误", err.Error())
 			}
 		} else {
-			printNodeField(w, language, "wireguard_error", "WireGuard 错误", err.Error())
+			printNodeField(w, language, "wireguard_runtime", "WireGuard 运行方式", tr(language, "sing-box embedded endpoint", "sing-box 内置 endpoint"))
+			printNodeField(w, language, "wireguard_status", "WireGuard 状态", tr(language, "managed by sing-box; no system wg interface is expected", "由 sing-box 管理；不会创建系统 wg 设备"))
 		}
 		if status, err := singbox.Status(singbox.ManagerOptions{}); err == nil {
 			printNodeField(w, language, "proxy_running", "本地代理已启动", fmt.Sprintf("%t", status.Running))
@@ -230,6 +241,10 @@ func printNodeDetails(out interface{ Write([]byte) (int, error) }, language stri
 		}
 	}
 	return w.Flush()
+}
+
+func nodeUsesSystemWireGuard(node config.Node) bool {
+	return strings.TrimSpace(node.WGLocalConfigPath) != ""
 }
 
 func printNodeField(w *tabwriter.Writer, language string, enKey string, zhKey string, value string) {

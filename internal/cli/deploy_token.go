@@ -142,6 +142,7 @@ func newDeployTokenCreateCommandWithHooks(checkPort func(string, int) error, che
 			fmt.Fprintln(cmd.OutOrStdout(), tr(language, "or:", "或："))
 			fmt.Fprintf(cmd.OutOrStdout(), "curl -fsSL %s/install.sh | sudo bash -s -- %s\n", repoBaseURL, installArgs)
 			fmt.Fprintln(cmd.OutOrStdout(), divider)
+			fmt.Fprintln(cmd.OutOrStdout(), cloudSecurityGroupReminder(language, fmt.Sprintf("%d/tcp", cfg.Listen.Port), fmt.Sprintf("%d/udp", wgEndpointPort)))
 			return nil
 		},
 	}
@@ -429,7 +430,7 @@ func startProxyForNode(configPath string, cfg config.Config, node config.Node) e
 		if err := singbox.WriteConfig(singbox.DefaultConfigPath(), data); err != nil {
 			return fmt.Errorf("write sing-box config: %w", err)
 		}
-		return startProxyService(configPath)
+		return startProxyService(configPath, &node)
 	}
 	_, err = singbox.Start(data, singbox.ManagerOptions{})
 	return err

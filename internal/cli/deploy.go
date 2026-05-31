@@ -87,6 +87,7 @@ func newDeployCommand() *cobra.Command {
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "deployed node: %s\n", result.Node.Name)
+			fmt.Fprintln(cmd.OutOrStdout(), cloudSecurityGroupReminder(language, fmt.Sprintf("%d/udp", opts.WGEndpointPort)))
 			return nil
 		},
 	}

@@ -117,12 +117,16 @@ func BuildJSON(cfg config.Config, opts Options) ([]byte, error) {
 	return Marshal(sb)
 }
 
+func InboundTag(nodeName string) string {
+	return "in-" + safeTag(nodeName)
+}
+
 func buildNode(node config.Node, opts Options) (Inbound, Endpoint, RouteRule, error) {
 	if err := validateNode(node); err != nil {
 		return Inbound{}, Endpoint{}, RouteRule{}, err
 	}
 
-	inboundTag := "in-" + safeTag(node.Name)
+	inboundTag := InboundTag(node.Name)
 	endpointTag := "wg-" + safeTag(node.Name)
 	inboundType := node.Proxy
 	if inboundType == config.ProxySocks5 {
@@ -132,11 +136,6 @@ func buildNode(node config.Node, opts Options) (Inbound, Endpoint, RouteRule, er
 	host, port, err := splitEndpoint(node.Endpoint)
 	if err != nil {
 		return Inbound{}, Endpoint{}, RouteRule{}, fmt.Errorf("node %s endpoint: %w", node.Name, err)
-	}
-
-	endpointName := node.WGLocalDevice
-	if endpointName == "" {
-		endpointName = "wpc-" + safeTag(node.Name)
 	}
 
 	inbound := Inbound{
@@ -149,7 +148,7 @@ func buildNode(node config.Node, opts Options) (Inbound, Endpoint, RouteRule, er
 		Type:       "wireguard",
 		Tag:        endpointTag,
 		System:     false,
-		Name:       endpointName,
+		Name:       DefaultEndpointName(node),
 		MTU:        opts.MTU,
 		Address:    []string{node.WGClientAddress},
 		PrivateKey: node.WGClientPrivateKey,
@@ -236,4 +235,11 @@ func safeTag(name string) string {
 		return "node"
 	}
 	return out
+}
+
+func DefaultEndpointName(node config.Node) string {
+	if strings.TrimSpace(node.WGLocalDevice) != "" {
+		return node.WGLocalDevice
+	}
+	return "wpc-" + safeTag(node.Name)
 }

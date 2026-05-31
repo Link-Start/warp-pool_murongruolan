@@ -76,6 +76,10 @@ func newListenConfigCommand() *cobra.Command {
 }
 
 func newListenStartCommand() *cobra.Command {
+	return newListenStartCommandWithHooks(ensureListenServiceInstalled, runSystemctl, runtime.GOOS)
+}
+
+func newListenStartCommandWithHooks(ensureService func(string) error, systemctl func(...string) error, runtimeOS string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "start",
 		Short: "Start registration listener service",
@@ -85,13 +89,14 @@ func newListenStartCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
-			if runtime.GOOS != "linux" {
+			language := cfgLanguage(cfg)
+			if runtimeOS != "linux" {
 				return runListenForeground(cmd, "")
 			}
-			if err := ensureListenServiceInstalled(path); err != nil {
+			if err := ensureService(path); err != nil {
 				return err
 			}
-			if err := runSystemctl("enable", "--now", "warppool-listen.service"); err != nil {
+			if err := systemctl("enable", "--now", "warppool-listen.service"); err != nil {
 				return err
 			}
 			cfg = config.SetListenEnabled(cfg, true)
@@ -102,8 +107,9 @@ func newListenStartCommand() *cobra.Command {
 			if publicHost == "" {
 				publicHost = cfg.Listen.Host
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "registration listener service started: %s\n", listenURL(publicHost, cfg.Listen.Port))
-			fmt.Fprintln(cmd.OutOrStdout(), "stop it with: warppool listen stop")
+			fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(language, "registration listener service started:", "注册监听服务已启动："), listenURL(publicHost, cfg.Listen.Port))
+			fmt.Fprintln(cmd.OutOrStdout(), tr(language, "stop it with: warppool listen stop", "停止监听命令：warppool listen stop"))
+			fmt.Fprintln(cmd.OutOrStdout(), cloudSecurityGroupReminder(language, fmt.Sprintf("%d/tcp", cfg.Listen.Port)))
 			return nil
 		},
 	}
@@ -130,6 +136,7 @@ func runListenForeground(cmd *cobra.Command, publicHost string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	language := cfgLanguage(cfg)
 	if err := config.CheckPortAvailable(cfg.Listen.Host, cfg.Listen.Port); err != nil {
 		return err
 	}
@@ -152,8 +159,9 @@ func runListenForeground(cmd *cobra.Command, publicHost string) error {
 	if publicHost == "" {
 		publicHost = cfg.Listen.Host
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "registration listener started: %s\n", listenURL(publicHost, cfg.Listen.Port))
-	fmt.Fprintln(cmd.OutOrStdout(), "press Ctrl+C to stop")
+	fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(language, "registration listener started:", "注册监听已启动："), listenURL(publicHost, cfg.Listen.Port))
+	fmt.Fprintln(cmd.OutOrStdout(), tr(language, "press Ctrl+C to stop", "按 Ctrl+C 停止"))
+	fmt.Fprintln(cmd.OutOrStdout(), cloudSecurityGroupReminder(language, fmt.Sprintf("%d/tcp", cfg.Listen.Port)))
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -169,13 +177,13 @@ func runListenForeground(cmd *cobra.Command, publicHost string) error {
 
 	select {
 	case sig := <-sigCh:
-		fmt.Fprintf(cmd.OutOrStdout(), "received signal: %s\n", sig)
+		fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(language, "received signal:", "收到信号："), sig)
 	case err := <-errCh:
 		if err != nil {
 			return err
 		}
 	case <-watchListenStop(path, 1*time.Second):
-		fmt.Fprintln(cmd.OutOrStdout(), "listener stop requested")
+		fmt.Fprintln(cmd.OutOrStdout(), tr(language, "listener stop requested", "收到监听停止请求"))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -189,7 +197,7 @@ func runListenForeground(cmd *cobra.Command, publicHost string) error {
 		cfg = config.SetListenEnabled(cfg, false)
 		_ = config.SaveExisting(path, cfg)
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), "registration listener stopped")
+	fmt.Fprintln(cmd.OutOrStdout(), tr(language, "registration listener stopped", "注册监听已停止"))
 	return nil
 }
 
@@ -232,7 +240,7 @@ func newListenStopCommand() *cobra.Command {
 				return fmt.Errorf("save config: %w", err)
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), "registration listener stopped")
+			fmt.Fprintln(cmd.OutOrStdout(), tr(cfgLanguage(cfg), "registration listener stopped", "注册监听已停止"))
 			return nil
 		},
 	}

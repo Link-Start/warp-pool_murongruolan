@@ -84,6 +84,26 @@ func TestStartRejectsBusyPort(t *testing.T) {
 	}
 }
 
+func TestCheckInboundPortsExceptIgnoresRestartingInbound(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	_, portText, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("split addr: %v", err)
+	}
+	data := []byte(fmt.Sprintf(`{"inbounds":[{"type":"mixed","tag":"in-us1","listen":"127.0.0.1","listen_port":%s}]}`, portText))
+	if err := CheckInboundPortsExcept(data, map[string]bool{"in-us1": true}); err != nil {
+		t.Fatalf("expected ignored busy port to pass, got %v", err)
+	}
+	if err := CheckInboundPortsExcept(data, map[string]bool{"in-other": true}); err == nil {
+		t.Fatal("expected non-ignored busy port to fail")
+	}
+}
+
 func TestStatusReadsPID(t *testing.T) {
 	dir := t.TempDir()
 	pidPath := filepath.Join(dir, "sing-box.pid")
