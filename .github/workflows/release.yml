@@ -31,6 +31,16 @@ jobs:
             exit 1
           fi
 
+      - name: Check release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes=".github/release-notes/${GITHUB_REF_NAME}.md"
+          if [ ! -s "$notes" ]; then
+            echo "missing release notes: $notes" >&2
+            exit 1
+          fi
+
       - name: Test
         run: go test ./...
 
