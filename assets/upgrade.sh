@@ -25,10 +25,10 @@ PROGRESS_RUNNING="false"
 PROGRESS_STATE=""
 PROGRESS_PID=""
 PROGRESS_STARTED_AT=""
+PROGRESS_LINE_COUNT=0
 
 log() {
   if [ "${PROGRESS_RUNNING:-false}" = "true" ] && [ -t 1 ]; then
-    clear_progress_output
     printf '[WarpPool][upgrade] %s\n' "$*"
     render_progress
     return 0
@@ -174,14 +174,14 @@ render_progress() {
     else
       label="在线升级"
     fi
-    printf '[WarpPool] %s %s/%s %s | 已用 %ss\n当前步骤：%s' "$bar" "$stage" "$total" "$label" "$elapsed" "$msg"
+    draw_progress_block "$(printf '[WarpPool] %s %s/%s %s | 已用 %ss\n当前步骤：%s' "$bar" "$stage" "$total" "$label" "$elapsed" "$msg")"
   else
     if [ -n "$LOCAL_FILE" ]; then
       label="local package upgrade"
     else
       label="release upgrade"
     fi
-    printf '[WarpPool] %s %s/%s %s | %ss elapsed\nCurrent step: %s' "$bar" "$stage" "$total" "$label" "$elapsed" "$msg"
+    draw_progress_block "$(printf '[WarpPool] %s %s/%s %s | %ss elapsed\nCurrent step: %s' "$bar" "$stage" "$total" "$label" "$elapsed" "$msg")"
   fi
 }
 
@@ -203,7 +203,7 @@ start_progress() {
   PROGRESS_RUNNING="true"
   PROGRESS_STATE="$(mktemp)"
   PROGRESS_STARTED_AT="$(date +%s)"
-  printf '\n\n'
+  PROGRESS_LINE_COUNT=0
   progress_loop &
   PROGRESS_PID="$!"
 }
@@ -217,6 +217,7 @@ stop_progress() {
     fi
     if [ -t 1 ]; then
       clear_progress_output
+      printf '\n'
     fi
     if [ -n "${PROGRESS_STATE:-}" ]; then
       rm -f -- "$PROGRESS_STATE"
@@ -243,8 +244,22 @@ set_step() {
 
 clear_progress_output() {
   [ -t 1 ] || return 0
-  printf '\r\033[2K'
-  printf '\033[1A\r\033[2K' 2>/dev/null || true
+  while [ "${PROGRESS_LINE_COUNT:-0}" -gt 0 ]; do
+    printf '\r\033[2K'
+    PROGRESS_LINE_COUNT=$((PROGRESS_LINE_COUNT - 1))
+    if [ "$PROGRESS_LINE_COUNT" -gt 0 ]; then
+      printf '\033[1A'
+    fi
+  done
+}
+
+draw_progress_block() {
+  local text="$1"
+  printf '%s' "$text"
+  PROGRESS_LINE_COUNT=1
+  case "$text" in
+    *$'\n'*) PROGRESS_LINE_COUNT=2 ;;
+  esac
 }
 
 parse_args() {
@@ -510,6 +525,37 @@ install_new_version() {
   log "installed assets: $LIB_DIR/assets"
 }
 
+service_exists() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl list-unit-files "$1" >/dev/null 2>&1 || systemctl status "$1" >/dev/null 2>&1
+}
+
+service_should_restart() {
+  local service="$1"
+  service_exists "$service" || return 1
+  systemctl is-enabled "$service" >/dev/null 2>&1 || systemctl is-active "$service" >/dev/null 2>&1
+}
+
+stop_service_for_upgrade() {
+  local service="$1"
+  service_exists "$service" || return 0
+  if systemctl is-active "$service" >/dev/null 2>&1; then
+    systemctl stop "$service" >/dev/null 2>&1 || log "warning: failed to stop $service before upgrade"
+  fi
+}
+
+quiet_run() {
+  local output status
+  set +e
+  output="$("$@" 2>&1)"
+  status=$?
+  set -e
+  if [ "$status" -ne 0 ] && [ -n "$output" ]; then
+    printf '%s\n' "$output" >&2
+  fi
+  return "$status"
+}
+
 write_version_marker() {
   if [ "$DRY_RUN" = "true" ]; then
     return 0
@@ -530,14 +576,12 @@ restart_services() {
     return 0
   fi
   for service in warppool-listen.service warppool-proxy.service; do
-    if systemctl list-unit-files "$service" >/dev/null 2>&1; then
-      if systemctl is-enabled "$service" >/dev/null 2>&1 || systemctl is-active "$service" >/dev/null 2>&1; then
-        log "restarting $service"
-        if [ "$DRY_RUN" = "true" ]; then
-          log "dry-run: systemctl restart $service"
-        else
-          systemctl restart "$service" || log "warning: failed to restart $service"
-        fi
+    if service_should_restart "$service"; then
+      log "restarting $service"
+      if [ "$DRY_RUN" = "true" ]; then
+        log "dry-run: systemctl restart $service"
+      else
+        systemctl restart "$service" || log "warning: failed to restart $service"
       fi
     fi
   done
@@ -555,16 +599,16 @@ refresh_systemd_units() {
     return 0
   fi
   if [ -x "$bin" ]; then
-    "$bin" --config "$CONFIG_PATH" listen service install --warppool-bin "$bin" || log "warning: failed to refresh listen service"
+    quiet_run "$bin" --config "$CONFIG_PATH" listen service install --warppool-bin "$bin" || log "warning: failed to refresh listen service"
     if [ -x "$LIB_DIR/bin/sing-box" ]; then
       SINGBOX_BIN="$LIB_DIR/bin/sing-box"
     else
       SINGBOX_BIN="$(command -v sing-box || true)"
     fi
     if [ -n "$SINGBOX_BIN" ]; then
-      "$bin" --config "$CONFIG_PATH" proxy service install --warppool-bin "$bin" --singbox-bin "$SINGBOX_BIN" || log "warning: failed to refresh proxy service"
+      quiet_run "$bin" --config "$CONFIG_PATH" proxy service install --warppool-bin "$bin" --singbox-bin "$SINGBOX_BIN" || log "warning: failed to refresh proxy service"
     else
-      "$bin" --config "$CONFIG_PATH" proxy service install --warppool-bin "$bin" || log "warning: failed to refresh proxy service"
+      quiet_run "$bin" --config "$CONFIG_PATH" proxy service install --warppool-bin "$bin" || log "warning: failed to refresh proxy service"
     fi
   fi
 }
@@ -577,7 +621,7 @@ refresh_singbox() {
     return 0
   fi
   if [ -r "$script" ]; then
-    bash "$script" --yes source=default || log "warning: failed to refresh sing-box"
+    quiet_run bash "$script" --yes source=default || log "warning: failed to refresh sing-box"
   else
     log "warning: sing-box installer not found after upgrade: $script"
   fi
@@ -589,8 +633,11 @@ main() {
   require_root
   command -v tar >/dev/null 2>&1 || fail "tar is required"
   detect_arch
-  start_progress
   confirm
+  if [ "$DRY_RUN" != "true" ]; then
+    stop_service_for_upgrade warppool-proxy.service
+  fi
+  start_progress
   backup_existing
   download_and_verify
   install_new_version

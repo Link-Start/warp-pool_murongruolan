@@ -9,6 +9,7 @@ INSTALL_DIR="${WARPOOL_SINGBOX_INSTALL_DIR:-/usr/local/lib/warppool/bin}"
 DRY_RUN="false"
 YES="false"
 WORK_DIR=""
+tmp_target=""
 
 GITHUB_API_LATEST="https://api.github.com/repos/SagerNet/sing-box/releases/latest"
 GITHUB_RELEASE_BASE="https://github.com/SagerNet/sing-box/releases/download"
@@ -30,6 +31,9 @@ on_error() {
 }
 
 cleanup() {
+  if [ -n "${tmp_target:-}" ] && [ -e "$tmp_target" ]; then
+    rm -f -- "$tmp_target"
+  fi
   if [ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ]; then
     rm -rf -- "$WORK_DIR"
   fi
@@ -346,8 +350,11 @@ download_and_install() {
       ;;
   esac
 
-  cp "$binary" "$target" || fail "failed to copy sing-box to $target"
-  chmod 0755 "$target" || fail "failed to chmod sing-box: $target"
+  tmp_target="$(mktemp "$INSTALL_DIR/.sing-box.new.XXXXXX")" || fail "failed to create temporary sing-box target"
+  cp "$binary" "$tmp_target" || fail "failed to copy sing-box to $tmp_target"
+  chmod 0755 "$tmp_target" || fail "failed to chmod sing-box: $tmp_target"
+  mv -f "$tmp_target" "$target" || fail "failed to replace sing-box at $target"
+  tmp_target=""
   "$target" version >/dev/null 2>&1 || fail "installed sing-box cannot run: $target; try a glibc/musl-specific custom URL"
   version_line="$("$target" version | head -n 1)"
   log "installed $version_line to $target"

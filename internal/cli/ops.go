@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"net"
@@ -208,6 +210,14 @@ func newUpgradeCommand() *cobra.Command {
 			if scriptPath == "" {
 				scriptPath = resolveUpgradeScript()
 			}
+			cleanupScript := func() {}
+			if localFile != "" && !cmd.Flags().Changed("script") {
+				if extracted, cleanup, err := extractUpgradeScriptFromPackage(localFile); err == nil {
+					scriptPath = extracted
+					cleanupScript = cleanup
+				}
+			}
+			defer cleanupScript()
 			if _, err := os.Stat(scriptPath); err != nil {
 				return fmt.Errorf("upgrade helper not found: %s: %w", scriptPath, err)
 			}
@@ -251,6 +261,57 @@ func resolveUpgradeScript() string {
 		return candidate
 	}
 	return filepath.Join("/usr/local/lib/warppool/assets", "upgrade.sh")
+}
+
+func extractUpgradeScriptFromPackage(packagePath string) (string, func(), error) {
+	file, err := os.Open(packagePath)
+	if err != nil {
+		return "", func() {}, err
+	}
+	defer file.Close()
+
+	gz, err := gzip.NewReader(file)
+	if err != nil {
+		return "", func() {}, err
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", func() {}, err
+		}
+		name := filepath.ToSlash(header.Name)
+		if !strings.HasSuffix(name, "/assets/upgrade.sh") {
+			continue
+		}
+		dir, err := os.MkdirTemp("", "warppool-upgrade-*")
+		if err != nil {
+			return "", func() {}, err
+		}
+		cleanup := func() { _ = os.RemoveAll(dir) }
+		path := filepath.Join(dir, "upgrade.sh")
+		out, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o700)
+		if err != nil {
+			cleanup()
+			return "", func() {}, err
+		}
+		if _, err := io.Copy(out, tr); err != nil {
+			_ = out.Close()
+			cleanup()
+			return "", func() {}, err
+		}
+		if err := out.Close(); err != nil {
+			cleanup()
+			return "", func() {}, err
+		}
+		return path, cleanup, nil
+	}
+	return "", func() {}, fmt.Errorf("assets/upgrade.sh not found in local package")
 }
 
 func fileExistsLocal(path string) bool {
