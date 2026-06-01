@@ -15,6 +15,7 @@ import (
 
 func newDeployCommand() *cobra.Command {
 	var opts deploy.PushOptions
+	var verbose bool
 
 	cmd := &cobra.Command{
 		Use:   "deploy",
@@ -58,26 +59,38 @@ func newDeployCommand() *cobra.Command {
 				opts.SSH.Password = password
 			}
 
+			progress := newProgressReporter(cmd.OutOrStdout(), language)
+			opts.Progress = progress.Update
 			next, result, err := deploy.Push(cfg, opts)
-			for _, item := range result.Logs {
-				item = strings.TrimSpace(item)
-				if item == "" {
-					continue
-				}
-				fmt.Fprintln(cmd.OutOrStdout(), item)
-			}
 			if err != nil {
+				progress.Fail(tr(language, "Deploy failed. Full output:", "部署失败，完整输出如下："), result.Logs, err)
 				return err
 			}
 
+			progress.Update("save_config")
 			if err := config.SaveExisting(path, next); err != nil {
+				progress.Fail(tr(language, "Deploy failed while saving local configuration:", "部署已执行，但保存本地配置失败："), result.Logs, err)
 				return fmt.Errorf("save config: %w", err)
 			}
 			if !opts.DryRun && !opts.SkipWGUp {
+				progress.Update("start_proxy")
 				if err := startProxyForNode(path, next, result.Node); err != nil {
+					progress.Success("")
+					printDeployLogs(cmd.OutOrStdout(), result.Logs)
 					fmt.Fprintf(cmd.OutOrStdout(), "%s\n", tr(language, "warning: deployed node but failed to start local proxy service: "+err.Error(), "警告：节点已部署，但启动本地代理服务失败："+err.Error()))
 				} else {
+					progress.Success(tr(language, "Deploy completed.", "部署完成。"))
+					printDeploySummary(cmd.OutOrStdout(), language, result.Node, true)
+					if verbose {
+						printDeployLogs(cmd.OutOrStdout(), result.Logs)
+					}
 					fmt.Fprintf(cmd.OutOrStdout(), "%s\n", tr(language, "local proxy service started", "本地代理服务已启动"))
+				}
+			} else {
+				progress.Success(tr(language, "Deploy completed.", "部署完成。"))
+				printDeploySummary(cmd.OutOrStdout(), language, result.Node, false)
+				if verbose {
+					printDeployLogs(cmd.OutOrStdout(), result.Logs)
 				}
 			}
 
@@ -116,6 +129,7 @@ func newDeployCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.SkipForwarding, "skip-forwarding", false, "skip direct-mode IPv4 forwarding and NAT rules")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "validate and show deploy plan without SSH")
 	cmd.Flags().BoolVar(&opts.SkipPortCheck, "skip-port-check", false, "skip system port availability check")
+	cmd.Flags().BoolVar(&verbose, "verbose", false, "print full deploy logs after successful deploy")
 
 	return cmd
 }

@@ -35,11 +35,20 @@ type PushOptions struct {
 	SkipForwarding bool
 	SkipPortCheck  bool
 	WarpPort       int
+	Progress       ProgressFunc
 }
 
 type PushResult struct {
 	Node config.Node
 	Logs []string
+}
+
+type ProgressFunc func(key string, args ...string)
+
+func reportProgress(progress ProgressFunc, key string, args ...string) {
+	if progress != nil {
+		progress(key, args...)
+	}
 }
 
 func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error) {
@@ -72,6 +81,7 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 		return cfg, PushResult{}, err
 	}
 	if !opts.SkipPortCheck {
+		reportProgress(opts.Progress, "checking_local_port")
 		if err := config.CheckPortAvailable(opts.Node.BindHost, opts.Node.LocalPort); err != nil {
 			return cfg, PushResult{}, err
 		}
@@ -110,6 +120,7 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 		return cfg, result, nil
 	}
 
+	reportProgress(opts.Progress, "ssh_connect", fmt.Sprintf("%s:%d", opts.SSH.Host, opts.SSH.Port))
 	client, err := sshclient.Dial(sshclient.Config{
 		Host: opts.SSH.Host,
 		Port: opts.SSH.Port,
@@ -126,19 +137,23 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 		return cfg, result, err
 	}
 	defer client.Close()
+	reportProgress(opts.Progress, "ssh_connected")
 
-	if err := uploadAssets(client, opts.AssetsDir, opts.RemoteDir, &result); err != nil {
+	if err := uploadAssets(client, opts.AssetsDir, opts.RemoteDir, &result, opts.Progress); err != nil {
 		return cfg, result, err
 	}
 
+	reportProgress(opts.Progress, "detect_privilege")
 	runner, err := detectRemoteRunner(client, opts.SSH.User, opts.SSH.Password)
 	if err != nil {
 		return cfg, result, err
 	}
 	if runner.UsesSudo {
+		reportProgress(opts.Progress, "using_sudo")
 		result.Logs = append(result.Logs, "remote user is not root; using sudo for privileged commands")
 	}
 
+	reportProgress(opts.Progress, "install_node")
 	command := fmt.Sprintf("bash %s mode=%s", shellPath(filepath.ToSlash(filepath.Join(opts.RemoteDir, "install.sh"))), opts.Node.ExitMode)
 	remoteResult, err := runner.Run(command)
 	result.Logs = append(result.Logs, remoteResult.Stdout)
@@ -150,6 +165,7 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	}
 
 	if wgOptions.EnableForwarding {
+		reportProgress(opts.Progress, "detect_egress")
 		egress, err := detectEgressInterface(runner)
 		if err != nil {
 			return cfg, result, err
@@ -158,6 +174,7 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 		result.Logs = append(result.Logs, "detected egress interface: "+egress)
 	}
 
+	reportProgress(opts.Progress, "generate_wireguard")
 	wgPlan, err := wireguard.BuildPlan(cfg, wgOptions)
 	if err != nil {
 		return cfg, result, err
@@ -165,10 +182,12 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	opts.Node = wireguard.ApplyPlan(opts.Node, wgPlan)
 	result.Node = opts.Node
 
+	reportProgress(opts.Progress, "configure_wireguard")
 	if err := configureRemoteWireGuard(runner, wgPlan, opts.RemoteDir, opts.SkipWGUp, &result); err != nil {
 		return cfg, result, err
 	}
 	if opts.Node.ExitMode == config.ExitModeWarp && !opts.SkipWGUp {
+		reportProgress(opts.Progress, "configure_warp")
 		if err := configureRemoteWarpForwarding(runner, wgPlan, opts.RemoteDir, opts.WarpPort, &result); err != nil {
 			return cfg, result, err
 		}
@@ -316,7 +335,7 @@ func SwitchModeSSH(opts ModeSwitchOptions) (ModeSwitchResult, error) {
 	defer client.Close()
 
 	uploadResult := PushResult{}
-	if err := uploadAssets(client, opts.AssetsDir, opts.RemoteDir, &uploadResult); err != nil {
+	if err := uploadAssets(client, opts.AssetsDir, opts.RemoteDir, &uploadResult, nil); err != nil {
 		return result, err
 	}
 	result.Logs = append(result.Logs, uploadResult.Logs...)
@@ -383,7 +402,8 @@ func warpForwardCommand(plan wireguard.Plan, remoteDir string, warpPort int) str
 	)
 }
 
-func uploadAssets(client *sshclient.Client, assetsDir string, remoteDir string, result *PushResult) error {
+func uploadAssets(client *sshclient.Client, assetsDir string, remoteDir string, result *PushResult, progress ProgressFunc) error {
+	reportProgress(progress, "prepare_remote_dir")
 	if _, err := client.Run("mkdir -p " + shellPath(remoteDir)); err != nil {
 		return err
 	}
@@ -401,6 +421,7 @@ func uploadAssets(client *sshclient.Client, assetsDir string, remoteDir string, 
 			return err
 		}
 		remotePath := filepath.ToSlash(filepath.Join(remoteDir, entry.Name()))
+		reportProgress(progress, "upload_asset", entry.Name())
 		if err := client.Upload(remotePath, data, "0755"); err != nil {
 			return err
 		}
