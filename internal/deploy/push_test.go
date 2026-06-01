@@ -95,6 +95,51 @@ func TestPushDryRunRejectsDuplicatePort(t *testing.T) {
 	}
 }
 
+func TestPushDryRunStoresSSHMetadata(t *testing.T) {
+	cfg := config.Default()
+	_, result, err := Push(cfg, PushOptions{
+		DryRun:        true,
+		SkipPortCheck: true,
+		WGEndpoint:    "198.51.100.10",
+		SSH: SSHOptions{
+			Host:                  "203.0.113.9",
+			Port:                  25122,
+			User:                  "ubuntu",
+			KeyPath:               "/root/.ssh/id_ed25519",
+			KnownHostsPath:        "/root/.ssh/known_hosts",
+			InsecureIgnoreHostKey: true,
+		},
+		Node: config.Node{
+			Name:      "nat1",
+			ExitMode:  config.ExitModeDirect,
+			Proxy:     config.ProxyMixed,
+			BindHost:  "127.0.0.1",
+			LocalPort: 10013,
+		},
+	})
+	if err != nil {
+		t.Fatalf("push dry-run: %v", err)
+	}
+	if result.Node.SSHHost != "203.0.113.9" {
+		t.Fatalf("unexpected ssh host: %q", result.Node.SSHHost)
+	}
+	if result.Node.SSHPort != 25122 {
+		t.Fatalf("unexpected ssh port: %d", result.Node.SSHPort)
+	}
+	if result.Node.SSHUser != "ubuntu" {
+		t.Fatalf("unexpected ssh user: %q", result.Node.SSHUser)
+	}
+	if result.Node.SSHKeyPath != "/root/.ssh/id_ed25519" {
+		t.Fatalf("unexpected ssh key path: %q", result.Node.SSHKeyPath)
+	}
+	if result.Node.SSHKnownHostsPath != "/root/.ssh/known_hosts" {
+		t.Fatalf("unexpected known_hosts path: %q", result.Node.SSHKnownHostsPath)
+	}
+	if !result.Node.SSHInsecureHostKey {
+		t.Fatal("expected insecure host key flag to be stored")
+	}
+}
+
 func TestRunWireGuardPreflightCommandUsesRemoteDir(t *testing.T) {
 	command := wireGuardPreflightCommand(wireGuardPreflightOptions{
 		RemoteDir:     "/tmp/custom dir",

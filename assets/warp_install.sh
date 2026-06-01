@@ -3,12 +3,14 @@ set -Eeuo pipefail
 
 POLICY="auto"
 DRY_RUN="false"
-MIN_WARP_FREE_MB="${WARPPOOL_WARP_MIN_FREE_MB:-${WARPOOL_WARP_MIN_FREE_MB:-1200}}"
-MIN_APT_CACHE_FREE_MB="${WARPPOOL_WARP_MIN_APT_CACHE_MB:-${WARPOOL_WARP_MIN_APT_CACHE_MB:-300}}"
+MIN_WARP_FREE_MB="${WARPPOOL_WARP_MIN_FREE_MB:-${WARPOOL_WARP_MIN_FREE_MB:-350}}"
+WARN_WARP_FREE_MB="${WARPPOOL_WARP_WARN_FREE_MB:-${WARPOOL_WARP_WARN_FREE_MB:-1200}}"
+MIN_APT_CACHE_FREE_MB="${WARPPOOL_WARP_MIN_APT_CACHE_MB:-${WARPOOL_WARP_MIN_APT_CACHE_MB:-150}}"
 MIN_TMP_FREE_MB="${WARPPOOL_WARP_MIN_TMP_MB:-${WARPOOL_WARP_MIN_TMP_MB:-100}}"
 MIN_FREE_INODES="${WARPPOOL_WARP_MIN_FREE_INODES:-${WARPOOL_WARP_MIN_FREE_INODES:-5000}}"
 APT_DOWNLOAD_MB=0
 APT_INSTALL_MB=0
+APT_SPACE_ESTIMATED="false"
 
 log() {
   printf '[WarpPool][warp] %s\n' "$*"
@@ -22,6 +24,7 @@ fail() {
 on_error() {
   local status=$?
   local line="$1"
+  cleanup_package_cache >/dev/null 2>&1 || true
   printf '[WarpPool][warp][ERROR] command failed with exit %s at line %s: %s\n' "$status" "$line" "$BASH_COMMAND" >&2
   exit "$status"
 }
@@ -56,6 +59,17 @@ run() {
     return 0
   fi
   "$@"
+}
+
+cleanup_package_cache() {
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: clean apt cache"
+    return 0
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get clean >/dev/null 2>&1 || true
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/* 2>/dev/null || true
+  fi
 }
 
 validate_non_negative_int() {
@@ -118,6 +132,20 @@ check_free_mb() {
   fi
 }
 
+warn_free_mb() {
+  local path="$1"
+  local threshold="$2"
+  local purpose="$3"
+  local free
+  free="$(available_mb "$path" || true)"
+  if [ -z "$free" ]; then
+    return 0
+  fi
+  if [ "$free" -lt "$threshold" ]; then
+    log "warning: low disk space for Cloudflare WARP install: $path has ${free}MB free, below recommended ${threshold}MB for $purpose; continuing because it is above the hard minimum"
+  fi
+}
+
 check_free_inodes() {
   local path="$1"
   local required="$2"
@@ -137,6 +165,7 @@ estimate_apt_space() {
   local output need_line add_line need_value need_unit add_value add_unit
   APT_DOWNLOAD_MB=0
   APT_INSTALL_MB=0
+  APT_SPACE_ESTIMATED="false"
   output="$(LC_ALL=C apt-get -s install -y cloudflare-warp 2>/dev/null || true)"
 
   need_line="$(printf '%s\n' "$output" | sed -n 's/^Need to get \([^ ]*\) \([^ ]*\) of archives\..*/\1 \2/p' | tail -n 1)"
@@ -147,17 +176,20 @@ estimate_apt_space() {
 $need_line
 EOF
     APT_DOWNLOAD_MB="$(size_to_mb "$need_value" "$need_unit")"
+    APT_SPACE_ESTIMATED="true"
   fi
   if [ -n "$add_line" ]; then
     read -r add_value add_unit <<EOF
 $add_line
 EOF
     APT_INSTALL_MB="$(size_to_mb "$add_value" "$add_unit")"
+    APT_SPACE_ESTIMATED="true"
   fi
 }
 
 preflight_basic_disk_space() {
   validate_non_negative_int WARPPOOL_WARP_MIN_FREE_MB "$MIN_WARP_FREE_MB"
+  validate_non_negative_int WARPPOOL_WARP_WARN_FREE_MB "$WARN_WARP_FREE_MB"
   validate_non_negative_int WARPPOOL_WARP_MIN_APT_CACHE_MB "$MIN_APT_CACHE_FREE_MB"
   validate_non_negative_int WARPPOOL_WARP_MIN_TMP_MB "$MIN_TMP_FREE_MB"
   validate_non_negative_int WARPPOOL_WARP_MIN_FREE_INODES "$MIN_FREE_INODES"
@@ -171,19 +203,25 @@ preflight_basic_disk_space() {
 preflight_warp_install_space() {
   local install_required var_required
   estimate_apt_space
-  install_required=$((APT_INSTALL_MB + 200))
-  var_required=$((APT_DOWNLOAD_MB + 200))
-  if [ "$install_required" -lt "$MIN_WARP_FREE_MB" ]; then
+  if [ "$APT_SPACE_ESTIMATED" = "true" ]; then
+    install_required=$((APT_INSTALL_MB + 200))
+    var_required=$((APT_DOWNLOAD_MB + 100))
+    if [ "$install_required" -lt "$MIN_WARP_FREE_MB" ]; then
+      install_required="$MIN_WARP_FREE_MB"
+    fi
+    if [ "$var_required" -lt "$MIN_APT_CACHE_FREE_MB" ]; then
+      var_required="$MIN_APT_CACHE_FREE_MB"
+    fi
+  else
     install_required="$MIN_WARP_FREE_MB"
-  fi
-  if [ "$var_required" -lt "$MIN_APT_CACHE_FREE_MB" ]; then
     var_required="$MIN_APT_CACHE_FREE_MB"
   fi
 
-  log "disk preflight: apt download=${APT_DOWNLOAD_MB}MB, install=${APT_INSTALL_MB}MB, requiring /usr ${install_required}MB, /var ${var_required}MB, /tmp ${MIN_TMP_FREE_MB}MB"
+  log "disk preflight: apt estimated=${APT_SPACE_ESTIMATED}, download=${APT_DOWNLOAD_MB}MB, install=${APT_INSTALL_MB}MB, requiring /usr ${install_required}MB, /var ${var_required}MB, /tmp ${MIN_TMP_FREE_MB}MB"
   check_free_mb /usr "$install_required" "package unpack/install"
   check_free_mb /var "$var_required" "apt package cache"
   check_free_mb /tmp "$MIN_TMP_FREE_MB" "temporary files"
+  warn_free_mb /usr "$WARN_WARP_FREE_MB" "official WARP package unpack/install"
   check_free_inodes /usr "$MIN_FREE_INODES"
   check_free_inodes /var "$MIN_FREE_INODES"
   check_free_inodes /tmp "$MIN_FREE_INODES"
@@ -193,10 +231,39 @@ warp_installed() {
   command -v warp-cli >/dev/null 2>&1
 }
 
-install_cloudflare_repo_debian_like() {
+repo_tools_ready() {
+  command -v curl >/dev/null 2>&1 &&
+    command -v gpg >/dev/null 2>&1 &&
+    [ -r /etc/ssl/certs/ca-certificates.crt ]
+}
+
+ensure_repo_tools_debian_like() {
+  if repo_tools_ready; then
+    return 0
+  fi
+
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: install WARP repository tools: curl ca-certificates gpg"
+    return 0
+  fi
+
+  preflight_basic_disk_space
+  log "installing WARP repository tools"
+  env DEBIAN_FRONTEND=noninteractive apt-get update
+  if ! env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates gpg; then
+    log "warning: failed to install package 'gpg', retrying with 'gnupg'"
+    env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates gnupg
+  fi
+  cleanup_package_cache
+
   require_command curl
   require_command gpg
+  if [ ! -r /etc/ssl/certs/ca-certificates.crt ]; then
+    fail "ca-certificates bundle not found after installing repository tools"
+  fi
+}
 
+install_cloudflare_repo_debian_like() {
   local keyring="/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg"
   local list="/etc/apt/sources.list.d/cloudflare-client.list"
   local codename
@@ -226,16 +293,18 @@ install_cloudflare_repo_debian_like() {
     return 0
   fi
 
-  preflight_basic_disk_space
+  ensure_repo_tools_debian_like
   curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor -o "$keyring"
   echo "deb [signed-by=$keyring] https://pkg.cloudflareclient.com/ $codename main" >"$list"
 
   env DEBIAN_FRONTEND=noninteractive apt-get update
   preflight_warp_install_space
-  if ! env DEBIAN_FRONTEND=noninteractive apt-get install -y cloudflare-warp; then
+  if ! env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cloudflare-warp; then
+    cleanup_package_cache
     log_disk_status
     fail "Cloudflare WARP package install failed. If the output says 'Disk quota exceeded', free disk space/quota and repair apt with: apt-get clean && dpkg --configure -a && apt-get -f install"
   fi
+  cleanup_package_cache
 }
 
 register_and_connect() {

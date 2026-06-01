@@ -60,6 +60,29 @@ func (p promptIO) askRequired(label string, current string) (string, error) {
 	}
 }
 
+func (p promptIO) askRequiredWithDefault(label string, current string, def string) (string, error) {
+	if strings.TrimSpace(current) != "" {
+		return current, nil
+	}
+	def = strings.TrimSpace(def)
+	if def == "" {
+		return p.askRequired(label, current)
+	}
+	reader := bufio.NewReader(p.in)
+	for {
+		fmt.Fprintf(p.out, "%s [%s]: ", label, def)
+		value, err := reader.ReadString('\n')
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", label, err)
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return def, nil
+		}
+		return value, nil
+	}
+}
+
 func (p promptIO) askString(label string, current string, def string) (string, error) {
 	if strings.TrimSpace(current) != "" {
 		return current, nil

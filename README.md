@@ -99,6 +99,8 @@ Exit node
 
 WARP mode depends on Cloudflare's official Linux client packages. Alpine WARP mode is not supported by the built-in installer.
 
+Recommended disk size: around 1 GB. The installer is optimized for small disks by installing only required WireGuard tools, avoiding the WireGuard meta package on Debian/Ubuntu, and cleaning package caches after installation steps.
+
 ### CPU Architecture
 
 | Architecture | Status | WARP |
@@ -248,6 +250,8 @@ curl --socks5 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace
 
 Current limitation: WARP forwarding is TCP-first. UDP and IPv6 are not promised as complete yet.
 
+WARP mode is optimized for 1 GB-class small disk nodes. WarpPool installs repository tools only when WARP mode is selected, uses `--no-install-recommends` where possible, cleans package caches after each step, and warns instead of blocking when disk space is below the recommended threshold but above the hard minimum.
+
 ---
 
 ## Pull Deployment
@@ -343,6 +347,8 @@ warppool node mode nat01 warp --method ssh # Switch automatically over SSH
 
 Pull mode first reads `/etc/warppool-node/state.json` on the exit node, so normally you do not need to enter the main server address again. For old nodes without this state file, the script prompts for the server address, or you can use the fallback command printed by the main server with `server=http://<main-server-ip>:<port>`.
 
+SSH mode reuses the non-sensitive SSH connection information saved during Push deployment, including SSH host, port, user, SSH key path, known_hosts path, and host-key-check preference. SSH passwords are never saved. During interactive mode switching, saved SSH host, port, and user are shown as defaults; press Enter to reuse them or type new values to override.
+
 ### WireGuard
 
 ```bash
@@ -374,9 +380,23 @@ warppool export clash -o clash.yaml # Export Clash-compatible config
 ```bash
 warppool version # Show version information
 warppool doctor # Check local runtime and port status
-warppool ping nat01 # Test WireGuard connectivity to nat01
+warppool ping nat01 # Test node public endpoint latency, direct HTTP latency, and proxy egress IP/latency
 warppool upgrade --yes # Upgrade binary and bundled installer assets
 warppool speedtest --proxy http://127.0.0.1:10133 # Run a simple speed test through a proxy
+```
+
+`warppool ping` uses multiple fallback HTTP check URLs by default:
+
+```text
+https://api.ipify.org
+https://icanhazip.com
+https://ifconfig.me/ip
+```
+
+Custom URLs can be supplied as a comma-separated list:
+
+```bash
+warppool ping nat01 --url https://api.ipify.org,https://icanhazip.com
 ```
 
 Note: `speedtest` is safest with HTTP proxy URLs. Full SOCKS proxy handling is planned.

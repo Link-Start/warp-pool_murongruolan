@@ -56,10 +56,16 @@ func newDoctorCommand() *cobra.Command {
 }
 
 func newPingCommand() *cobra.Command {
-	return newPingCommandWithHTTPCheck(fetchText)
+	return newPingCommandWithChecks(fetchText, runPing)
 }
 
 func newPingCommandWithHTTPCheck(httpCheck func(string, string, time.Duration) (string, error)) *cobra.Command {
+	return newPingCommandWithChecks(httpCheck, func(string, int, time.Duration) (string, error) {
+		return "rtt min/avg/max/mdev = 1.000/1.000/1.000/0.000 ms", nil
+	})
+}
+
+func newPingCommandWithChecks(httpCheck func(string, string, time.Duration) (string, error), icmpCheck func(string, int, time.Duration) (string, error)) *cobra.Command {
 	var count int
 	var timeout time.Duration
 	var checkURL string
@@ -84,9 +90,14 @@ func newPingCommandWithHTTPCheck(httpCheck func(string, string, time.Duration) (
 			if len(nodes) == 0 {
 				return fmt.Errorf("no nodes configured")
 			}
+			language := cfgLanguage(cfg)
+			checkURLs := parseCheckURLs(checkURL)
 
 			for _, node := range nodes {
 				fmt.Fprintf(cmd.OutOrStdout(), "== %s ==\n", node.Name)
+				printNodePublicLatency(cmd.OutOrStdout(), language, node, count, timeout, icmpCheck)
+				printDirectHTTPCheck(cmd.OutOrStdout(), language, checkURLs, timeout, httpCheck)
+
 				if nodeUsesSystemWireGuard(node) {
 					target := hostOnly(node.WGServerAddress)
 					if target == "" {
@@ -94,7 +105,7 @@ func newPingCommandWithHTTPCheck(httpCheck func(string, string, time.Duration) (
 						continue
 					}
 					fmt.Fprintf(cmd.OutOrStdout(), "mode: system wireguard ping (%s)\n", target)
-					out, err := runPing(target, count, timeout)
+					out, err := icmpCheck(target, count, timeout)
 					if strings.TrimSpace(out) != "" {
 						fmt.Fprintln(cmd.OutOrStdout(), strings.TrimSpace(out))
 					}
@@ -110,12 +121,13 @@ func newPingCommandWithHTTPCheck(httpCheck func(string, string, time.Duration) (
 					continue
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "mode: sing-box embedded wireguard proxy check (%s)\n", proxyURL)
-				body, err := httpCheck(checkURL, proxyURL, timeout)
+				body, usedURL, elapsed, err := fetchTextWithFallback(checkURLs, proxyURL, timeout, httpCheck)
 				if err != nil {
 					fmt.Fprintf(cmd.OutOrStdout(), "proxy check failed: %v\n", err)
 					continue
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "proxy check ok: %s\n", strings.TrimSpace(body))
+				fmt.Fprintf(cmd.OutOrStdout(), "proxy check url: %s\n", usedURL)
+				fmt.Fprintf(cmd.OutOrStdout(), "proxy check ok: %s (latency: %s)\n", strings.TrimSpace(body), formatDuration(elapsed))
 			}
 			return nil
 		},
@@ -123,8 +135,134 @@ func newPingCommandWithHTTPCheck(httpCheck func(string, string, time.Duration) (
 
 	cmd.Flags().IntVarP(&count, "count", "c", 3, "ping count")
 	cmd.Flags().DurationVar(&timeout, "timeout", 2*time.Second, "per-packet timeout")
-	cmd.Flags().StringVar(&checkURL, "url", "https://api.ipify.org", "HTTP URL used for sing-box proxy connectivity check")
+	cmd.Flags().StringVar(&checkURL, "url", strings.Join(defaultPingCheckURLs(), ","), "HTTP URL(s), comma-separated, used for direct/proxy connectivity checks")
 	return cmd
+}
+
+func defaultPingCheckURLs() []string {
+	return []string{
+		"https://api.ipify.org",
+		"https://icanhazip.com",
+		"https://ifconfig.me/ip",
+	}
+}
+
+func parseCheckURLs(raw string) []string {
+	items := strings.Split(raw, ",")
+	urls := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			urls = append(urls, item)
+		}
+	}
+	if len(urls) == 0 {
+		return defaultPingCheckURLs()
+	}
+	return urls
+}
+
+func printNodePublicLatency(out io.Writer, language string, node config.Node, count int, timeout time.Duration, icmpCheck func(string, int, time.Duration) (string, error)) {
+	target := nodeLatencyTarget(node)
+	if target == "" {
+		fmt.Fprintln(out, tr(language, "node latency skipped: missing public endpoint", "节点延迟检测已跳过：缺少公网端点"))
+		return
+	}
+	fmt.Fprintf(out, "%s %s\n", tr(language, "node public endpoint:", "节点公网地址："), target)
+	pingOutput, err := icmpCheck(target, count, timeout)
+	avg := pingAverageLatency(pingOutput)
+	if err != nil {
+		if strings.TrimSpace(pingOutput) != "" {
+			fmt.Fprintf(out, "%s %s\n", tr(language, "node latency output:", "节点延迟输出："), compactMultiline(pingOutput))
+		}
+		fmt.Fprintf(out, "%s %v\n", tr(language, "node latency failed:", "节点延迟检测失败："), err)
+		return
+	}
+	if avg != "" {
+		fmt.Fprintf(out, "%s %s\n", tr(language, "node latency avg:", "节点平均延迟："), avg)
+		return
+	}
+	fmt.Fprintln(out, tr(language, "node latency ok", "节点延迟检测通过"))
+}
+
+func printDirectHTTPCheck(out io.Writer, language string, urls []string, timeout time.Duration, httpCheck func(string, string, time.Duration) (string, error)) {
+	body, usedURL, elapsed, err := fetchTextWithFallback(urls, "", timeout, httpCheck)
+	if err != nil {
+		fmt.Fprintf(out, "%s %v\n", tr(language, "direct HTTP check failed:", "主服务器直连 HTTP 检测失败："), err)
+		return
+	}
+	fmt.Fprintf(out, "%s %s\n", tr(language, "direct HTTP check url:", "主服务器直连 HTTP 检测地址："), usedURL)
+	fmt.Fprintf(out, "%s %s (%s %s)\n",
+		tr(language, "direct HTTP check ok:", "主服务器直连 HTTP 检测通过："),
+		strings.TrimSpace(body),
+		tr(language, "latency:", "延迟："),
+		formatDuration(elapsed),
+	)
+}
+
+func fetchTextWithFallback(urls []string, proxyURL string, timeout time.Duration, httpCheck func(string, string, time.Duration) (string, error)) (string, string, time.Duration, error) {
+	var failures []string
+	for _, rawURL := range urls {
+		start := time.Now()
+		body, err := httpCheck(rawURL, proxyURL, timeout)
+		elapsed := time.Since(start)
+		if err == nil {
+			return body, rawURL, elapsed, nil
+		}
+		failures = append(failures, fmt.Sprintf("%s: %v", rawURL, err))
+	}
+	return "", "", 0, fmt.Errorf("all HTTP checks failed: %s", strings.Join(failures, "; "))
+}
+
+func nodeLatencyTarget(node config.Node) string {
+	if host := endpointHost(node.Endpoint); host != "" {
+		return host
+	}
+	if strings.TrimSpace(node.PublicIP) != "" {
+		return strings.TrimSpace(node.PublicIP)
+	}
+	if strings.TrimSpace(node.SSHHost) != "" {
+		return strings.TrimSpace(node.SSHHost)
+	}
+	return ""
+}
+
+func pingAverageLatency(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "min/avg") && strings.Contains(line, "=") {
+			_, after, ok := strings.Cut(line, "=")
+			if !ok {
+				continue
+			}
+			fields := strings.Fields(strings.TrimSpace(after))
+			if len(fields) == 0 {
+				continue
+			}
+			values := strings.Split(fields[0], "/")
+			if len(values) >= 2 && strings.TrimSpace(values[1]) != "" {
+				return strings.TrimSpace(values[1]) + " ms"
+			}
+		}
+		if idx := strings.LastIndex(line, "Average = "); idx >= 0 {
+			value := strings.TrimSpace(line[idx+len("Average = "):])
+			if value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func formatDuration(value time.Duration) string {
+	if value <= 0 {
+		return "0s"
+	}
+	if value < time.Millisecond {
+		return value.String()
+	}
+	return value.Round(time.Millisecond).String()
 }
 
 func newSpeedtestCommand() *cobra.Command {

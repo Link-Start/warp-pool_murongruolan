@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"runtime"
 	"strings"
@@ -480,15 +481,16 @@ type nodeModeSSHOptions struct {
 
 func runNodeModeSSH(cmd *cobra.Command, path string, cfg config.Config, node config.Node, targetMode string, opts nodeModeSSHOptions) error {
 	var err error
-	opts.SSH.Host, err = opts.Prompt.askRequired(tr(opts.Language, "SSH host/IP", "SSH 主机/IP"), opts.SSH.Host)
+	applyNodeSSHNonPromptDefaults(&opts.SSH, node)
+	opts.SSH.Host, err = opts.Prompt.askRequiredWithDefault(tr(opts.Language, "SSH host/IP", "SSH 主机/IP"), opts.SSH.Host, nodeSSHHostDefault(node))
 	if err != nil {
 		return err
 	}
-	opts.SSH.Port, err = opts.Prompt.askInt(tr(opts.Language, "SSH port", "SSH 端口"), opts.SSH.Port, 22)
+	opts.SSH.Port, err = opts.Prompt.askInt(tr(opts.Language, "SSH port", "SSH 端口"), opts.SSH.Port, defaultInt(node.SSHPort, 22))
 	if err != nil {
 		return err
 	}
-	opts.SSH.User, err = opts.Prompt.askString(tr(opts.Language, "SSH user", "SSH 用户"), opts.SSH.User, "root")
+	opts.SSH.User, err = opts.Prompt.askString(tr(opts.Language, "SSH user", "SSH 用户"), opts.SSH.User, defaultString(node.SSHUser, "root"))
 	if err != nil {
 		return err
 	}
@@ -545,6 +547,7 @@ func runNodeModeSSH(cmd *cobra.Command, path string, cfg config.Config, node con
 	}
 
 	node.ExitMode = targetMode
+	node = deploy.ApplySSHMetadata(node, opts.SSH)
 	next, err := config.UpdateNode(cfg, node)
 	if err != nil {
 		return err
@@ -559,6 +562,52 @@ func runNodeModeSSH(cmd *cobra.Command, path string, cfg config.Config, node con
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "%s %s -> %s\n", tr(opts.Language, "switched node mode:", "节点出口模式已切换："), node.Name, targetMode)
 	return nil
+}
+
+func applyNodeSSHNonPromptDefaults(ssh *deploy.SSHOptions, node config.Node) {
+	if strings.TrimSpace(ssh.KeyPath) == "" {
+		ssh.KeyPath = node.SSHKeyPath
+	}
+	if strings.TrimSpace(ssh.KnownHostsPath) == "" {
+		ssh.KnownHostsPath = node.SSHKnownHostsPath
+	}
+	if !ssh.InsecureIgnoreHostKey {
+		ssh.InsecureIgnoreHostKey = node.SSHInsecureHostKey
+	}
+}
+
+func nodeSSHHostDefault(node config.Node) string {
+	if strings.TrimSpace(node.SSHHost) != "" {
+		return strings.TrimSpace(node.SSHHost)
+	}
+	if strings.TrimSpace(node.PublicIP) != "" {
+		return strings.TrimSpace(node.PublicIP)
+	}
+	return endpointHost(node.Endpoint)
+}
+
+func endpointHost(endpoint string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(endpoint); err == nil {
+		return strings.Trim(host, "[]")
+	}
+	if strings.Count(endpoint, ":") == 1 {
+		host, _, ok := strings.Cut(endpoint, ":")
+		if ok {
+			return strings.TrimSpace(host)
+		}
+	}
+	return strings.Trim(endpoint, "[]")
+}
+
+func defaultInt(value int, fallback int) int {
+	if value == 0 {
+		return fallback
+	}
+	return value
 }
 
 func printNodeDetails(out interface{ Write([]byte) (int, error) }, language string, node config.Node, includeRuntime bool) error {
