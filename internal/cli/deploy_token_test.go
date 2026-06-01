@@ -61,7 +61,7 @@ func TestShortDeployToken(t *testing.T) {
 	}
 }
 
-func TestDeployTokenOutputIncludesTokenAndWireGuardPorts(t *testing.T) {
+func TestDeployTokenOutputKeepsNodeSideWireGuardInteractive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.Default()
 	cfg.Language = "zh"
@@ -92,16 +92,19 @@ func TestDeployTokenOutputIncludesTokenAndWireGuardPorts(t *testing.T) {
 		"--exit-mode", config.ExitModeDirect,
 		"--proxy", config.ProxyMixed,
 		"--port", "10013",
-		"--wg-listen-port", "51820",
-		"--wg-endpoint-port", "30021",
 	})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
 	text := out.String()
-	for _, want := range []string{"Deploy Token", "安装命令", "wg_listen_port=51820", "wg_endpoint_port=30021", "服务商控制台放行这些入站端口：8080/tcp, 30021/udp", "======================"} {
+	for _, want := range []string{"Deploy Token", "安装命令", "节点侧只会询问本机 WireGuard/NAT 端点信息", "服务商控制台放行这些入站端口：8080/tcp", "======================"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in output:\n%s", want, text)
+		}
+	}
+	for _, unexpected := range []string{"mode=", "wg_listen_port=", "wg_endpoint_port="} {
+		if strings.Contains(text, unexpected) {
+			t.Fatalf("unexpected %q in output:\n%s", unexpected, text)
 		}
 	}
 }

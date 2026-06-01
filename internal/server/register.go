@@ -47,6 +47,52 @@ func RegisterHandler(configPath string) http.Handler {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, RegisterResponse{OK: true, Message: "ok"})
 	})
+	mux.HandleFunc("/register/info", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writePrepareJSON(w, http.StatusMethodNotAllowed, PrepareResponse{OK: false, Message: "method not allowed"})
+			return
+		}
+
+		var req RegisterRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writePrepareJSON(w, http.StatusBadRequest, PrepareResponse{OK: false, Message: "invalid json body"})
+			return
+		}
+		if req.Token == "" {
+			writePrepareJSON(w, http.StatusBadRequest, PrepareResponse{OK: false, Message: "token is required"})
+			return
+		}
+
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			writePrepareJSON(w, http.StatusInternalServerError, PrepareResponse{OK: false, Message: "load config failed"})
+			fmt.Printf("[WarpPool][register][ERROR] load config: %v\n", err)
+			return
+		}
+		_, token, err := config.FindDeployToken(cfg, req.Token, time.Now().UTC())
+		if err != nil {
+			writePrepareJSON(w, http.StatusBadRequest, PrepareResponse{OK: false, Message: err.Error()})
+			return
+		}
+
+		node := token.Node
+		if node.ExitMode == "" {
+			node.ExitMode = cfg.Defaults.ExitMode
+		}
+		if node.Proxy == "" {
+			node.Proxy = cfg.Defaults.Proxy
+		}
+		if node.BindHost == "" {
+			node.BindHost = cfg.Defaults.BindHost
+		}
+
+		response := PrepareResponse{OK: true, Message: "ok", Node: node}
+		if r.URL.Query().Get("format") == "sh" {
+			writePrepareShell(w, http.StatusOK, response)
+			return
+		}
+		writePrepareJSON(w, http.StatusOK, response)
+	})
 	mux.HandleFunc("/register/prepare", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writePrepareJSON(w, http.StatusMethodNotAllowed, PrepareResponse{OK: false, Message: "method not allowed"})
@@ -80,9 +126,6 @@ func RegisterHandler(configPath string) http.Handler {
 		}
 
 		node := token.Node
-		if req.Mode != "" {
-			node.ExitMode = req.Mode
-		}
 		if node.ExitMode == "" {
 			node.ExitMode = cfg.Defaults.ExitMode
 		}

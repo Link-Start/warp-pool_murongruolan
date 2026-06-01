@@ -149,6 +149,27 @@ load_prepare_response() {
   [ -z "$NODE_EXIT_MODE" ] || MODE="$NODE_EXIT_MODE"
 }
 
+fetch_registration_info() {
+  if [ -z "$TOKEN" ] && [ -z "$SERVER" ]; then
+    return 0
+  fi
+
+  if [ -z "$TOKEN" ] || [ -z "$SERVER" ]; then
+    fail "token and server must be provided together"
+  fi
+
+  log "fetching node settings from WarpPool server"
+  local response
+  response="$(curl -fsS \
+    -X POST \
+    -H 'Content-Type: application/json' \
+    -d "{\"token\":\"$TOKEN\"}" \
+    "$SERVER/register/info?format=sh")" || fail "register info failed"
+  load_prepare_response "$response"
+  [ -n "$NODE_EXIT_MODE" ] || fail "register info response missing node exit mode"
+  log "main server selected mode: $MODE"
+}
+
 write_remote_config() {
   local response="$1"
   load_prepare_response "$response"
@@ -241,18 +262,9 @@ register_node() {
   response="$(curl -fsS \
     -X POST \
     -H 'Content-Type: application/json' \
-    -d "{\"token\":\"$TOKEN\",\"endpoint\":\"$ENDPOINT\",\"endpoint_port\":$WG_ENDPOINT_PORT,\"server_private_key\":\"$SERVER_PRIVATE_KEY\",\"server_public_key\":\"$SERVER_PUBLIC_KEY\",\"listen_port\":$WG_LISTEN_PORT,\"mode\":\"$MODE\"}" \
+    -d "{\"token\":\"$TOKEN\",\"endpoint\":\"$ENDPOINT\",\"endpoint_port\":$WG_ENDPOINT_PORT,\"server_private_key\":\"$SERVER_PRIVATE_KEY\",\"server_public_key\":\"$SERVER_PUBLIC_KEY\",\"listen_port\":$WG_LISTEN_PORT}" \
     "$SERVER/register/prepare?format=sh")" || fail "register prepare failed"
   write_remote_config "$response"
-  start_remote_wireguard
-  enable_direct_forwarding
-  log "completing node registration"
-  run curl -fsS \
-    -X POST \
-    -H 'Content-Type: application/json' \
-    -d "{\"token\":\"$TOKEN\"}" \
-    "$SERVER/register/complete" >/dev/null
-  log "node auto registration completed; local proxy service should start automatically on the main server"
 }
 
 main() {
@@ -261,8 +273,20 @@ main() {
   install_packages
   log_wireguard_ready
   install_node_uninstaller
+  fetch_registration_info
   maybe_install_warp
   register_node
+  if [ -n "$TOKEN" ] && [ -n "$SERVER" ]; then
+    start_remote_wireguard
+    enable_direct_forwarding
+    log "completing node registration"
+    run curl -fsS \
+      -X POST \
+      -H 'Content-Type: application/json' \
+      -d "{\"token\":\"$TOKEN\"}" \
+      "$SERVER/register/complete" >/dev/null
+    log "node auto registration completed; local proxy service should start automatically on the main server"
+  fi
   if [ -z "$TOKEN" ] && [ -z "$SERVER" ]; then
     log "node dependencies installed only; no main server registration was performed"
     log "to auto-register later, run 'warppool deploy-token' on the main server and execute the generated command on this node"

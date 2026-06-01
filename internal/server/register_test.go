@@ -113,7 +113,44 @@ func TestRegisterPrepareShellFormat(t *testing.T) {
 	}
 }
 
-func TestRegisterPrepareAllowsNodeModeOverride(t *testing.T) {
+func TestRegisterInfoShellFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := config.Default()
+	var err error
+	cfg, err = config.AddDeployToken(cfg, config.DeployToken{
+		Token:     "token-1",
+		ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		AutoStart: false,
+		Node: config.Node{
+			Name:      "nat1",
+			ExitMode:  config.ExitModeWarp,
+			Proxy:     config.ProxyMixed,
+			BindHost:  "127.0.0.1",
+			LocalPort: 10013,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(path, cfg, true); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := RegisterHandler(path)
+	req := httptest.NewRequest(http.MethodPost, "/register/info?format=sh", bytes.NewBufferString(`{"token":"token-1"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("info status %d: %s", rec.Code, rec.Body.String())
+	}
+	for _, want := range []string{"OK=1", "NODE_EXIT_MODE_B64=d2FycA=="} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Fatalf("shell response missing %q:\n%s", want, rec.Body.String())
+		}
+	}
+}
+
+func TestRegisterPrepareKeepsTokenNodeMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.Default()
 	var err error
@@ -148,7 +185,7 @@ func TestRegisterPrepareAllowsNodeModeOverride(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &prepare); err != nil {
 		t.Fatal(err)
 	}
-	if prepare.Node.ExitMode != config.ExitModeWarp {
-		t.Fatalf("expected mode override, got %s", prepare.Node.ExitMode)
+	if prepare.Node.ExitMode != config.ExitModeDirect {
+		t.Fatalf("expected token node mode, got %s", prepare.Node.ExitMode)
 	}
 }
