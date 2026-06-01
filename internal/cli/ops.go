@@ -168,7 +168,7 @@ func printNodePublicLatency(out io.Writer, language string, node config.Node, co
 		fmt.Fprintln(out, tr(language, "node latency skipped: missing public endpoint", "节点延迟检测已跳过：缺少公网端点"))
 		return
 	}
-	fmt.Fprintf(out, "%s %s\n", tr(language, "node latency target:", "节点延迟目标："), target)
+	fmt.Fprintf(out, "%s %s\n", tr(language, "node public endpoint:", "节点公网地址："), target)
 	pingOutput, err := icmpCheck(target, count, timeout)
 	avg := pingAverageLatency(pingOutput)
 	if err != nil {
