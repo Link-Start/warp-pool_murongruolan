@@ -43,6 +43,7 @@ fail_i() {
 on_error() {
   local status=$?
   local line="$1"
+  cleanup_package_cache >/dev/null 2>&1 || true
   printf '[WarpPool][server][ERROR] command failed with exit %s at line %s: %s\n' "$status" "$line" "$BASH_COMMAND" >&2
   exit "$status"
 }
@@ -124,6 +125,20 @@ run() {
     return 0
   fi
   "$@"
+}
+
+cleanup_package_cache() {
+  if [ "$DRY_RUN" = "true" ]; then
+    log_i "dry-run: clean package cache" "dry-run：清理软件包缓存"
+    return 0
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get clean >/dev/null 2>&1 || true
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/* 2>/dev/null || true
+  fi
+  if command -v apk >/dev/null 2>&1; then
+    rm -rf /var/cache/apk/* 2>/dev/null || true
+  fi
 }
 
 require_root() {
@@ -323,11 +338,12 @@ install_base_packages() {
   case "$OS_ID" in
     debian|ubuntu)
       run env DEBIAN_FRONTEND=noninteractive apt-get update
-      run env DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl wget tar wireguard wireguard-tools iproute2 iptables systemd
+      run env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl wget tar wireguard-tools iproute2 iptables systemd
+      cleanup_package_cache
       ;;
     alpine)
-      run apk update
-      run apk add ca-certificates curl wget tar wireguard-tools iproute2 iptables
+      run apk add --no-cache ca-certificates curl wget tar wireguard-tools iproute2 iptables
+      cleanup_package_cache
       ;;
   esac
 }

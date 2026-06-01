@@ -25,6 +25,7 @@ fail() {
 on_error() {
   local status=$?
   local line="$1"
+  cleanup_package_cache >/dev/null 2>&1 || true
   printf '[WarpPool][alpine][ERROR] command failed with exit %s at line %s: %s\n' "$status" "$line" "$BASH_COMMAND" >&2
   exit "$status"
 }
@@ -37,6 +38,14 @@ run() {
     return 0
   fi
   "$@"
+}
+
+cleanup_package_cache() {
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: clean apk cache"
+    return 0
+  fi
+  rm -rf /var/cache/apk/* 2>/dev/null || true
 }
 
 parse_args() {
@@ -70,9 +79,9 @@ normalize_language() {
 }
 
 install_packages() {
-  log "installing WireGuard and base tools"
-  run apk update
-  run apk add wireguard-tools iproute2 iptables curl ca-certificates coreutils
+  log "installing WireGuard tools and base tools"
+  run apk add --no-cache wireguard-tools iproute2 iptables curl ca-certificates coreutils
+  cleanup_package_cache
 }
 
 validate_wireguard_ports() {
@@ -87,7 +96,7 @@ validate_wireguard_ports() {
 }
 
 log_wireguard_ready() {
-  log "WireGuard package installed; config generation will be handled by WarpPool deploy flow"
+  log "WireGuard tools installed; config generation will be handled by WarpPool deploy flow"
 }
 
 check_wireguard_kernel_support() {
