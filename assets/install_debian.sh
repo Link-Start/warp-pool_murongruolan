@@ -11,6 +11,7 @@ DRY_RUN="false"
 NODE_EXIT_MODE=""
 SERVER_URL_FOR_STATE=""
 NODE_NAME=""
+LANGUAGE="${WARPPOOL_LANG:-${WARPOOL_LANG:-en}}"
 
 log() {
   printf '[WarpPool][debian] %s\n' "$*"
@@ -48,9 +49,24 @@ parse_args() {
       endpoint=*) ENDPOINT="${arg#endpoint=}" ;;
       wg_listen_port=*) WG_LISTEN_PORT="${arg#wg_listen_port=}" ;;
       wg_endpoint_port=*) WG_ENDPOINT_PORT="${arg#wg_endpoint_port=}" ;;
+      lang=*|language=*) LANGUAGE="${arg#*=}" ;;
       *) fail "unknown argument: $arg" ;;
     esac
   done
+}
+
+normalize_language() {
+  case "$1" in
+    zh|zh_CN|zh-CN|cn|CN|1)
+      printf 'zh\n'
+      ;;
+    en|en_US|en-US|english|English|2|"")
+      printf 'en\n'
+      ;;
+    *)
+      printf 'en\n'
+      ;;
+  esac
 }
 
 install_packages() {
@@ -209,6 +225,7 @@ write_node_state() {
     return 0
   fi
   SERVER_URL_FOR_STATE="$SERVER"
+  LANGUAGE="$(normalize_language "$LANGUAGE")"
   run mkdir -p /etc/warppool-node
   if [ "$DRY_RUN" = "true" ]; then
     log "dry-run: write /etc/warppool-node/state.json"
@@ -221,7 +238,8 @@ write_node_state() {
   "wg_device": "$WG_DEVICE",
   "wg_server_address": "$WG_SERVER_ADDR",
   "wg_client_address": "$WG_CLIENT_ADDR",
-  "last_mode": "$MODE"
+  "last_mode": "$MODE",
+  "language": "$LANGUAGE"
 }
 EOF
   chmod 0600 /etc/warppool-node/state.json

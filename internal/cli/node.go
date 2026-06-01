@@ -442,7 +442,7 @@ func runNodeModePull(cmd *cobra.Command, path string, cfg config.Config, node co
 	if opts.RepoBaseURL == "" {
 		opts.RepoBaseURL = "https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets"
 	}
-	command := fmt.Sprintf("curl -fsSL %s/node_mode.sh | sudo bash -s -- token=%s", opts.RepoBaseURL, tokenValue)
+	command := fmt.Sprintf("curl -fsSL %s/node_mode.sh | sudo bash -s -- token=%s lang=%s", opts.RepoBaseURL, tokenValue, opts.Language)
 	if opts.PrintCommand {
 		fmt.Fprintln(cmd.OutOrStdout(), command)
 		return nil
@@ -457,7 +457,7 @@ func runNodeModePull(cmd *cobra.Command, path string, cfg config.Config, node co
 	fmt.Fprintln(cmd.OutOrStdout(), tr(opts.Language, "Run this command on the exit node:", "请在出口节点执行以下命令："))
 	fmt.Fprintln(cmd.OutOrStdout(), command)
 	fmt.Fprintln(cmd.OutOrStdout(), tr(opts.Language, "If the exit node has no saved server state, run:", "如果出口节点没有保存主服务器状态，请执行："))
-	fmt.Fprintf(cmd.OutOrStdout(), "curl -fsSL %s/node_mode.sh | sudo bash -s -- token=%s server=%s\n", opts.RepoBaseURL, tokenValue, serverURL)
+	fmt.Fprintf(cmd.OutOrStdout(), "curl -fsSL %s/node_mode.sh | sudo bash -s -- token=%s server=%s lang=%s\n", opts.RepoBaseURL, tokenValue, serverURL, opts.Language)
 	fmt.Fprintln(cmd.OutOrStdout(), divider)
 	return nil
 }
@@ -523,6 +523,7 @@ func runNodeModeSSH(cmd *cobra.Command, path string, cfg config.Config, node con
 		DryRun:         opts.DryRun,
 		WarpPort:       opts.WarpPort,
 		AutoStartProxy: true,
+		Language:       opts.Language,
 	})
 	for _, item := range result.Logs {
 		item = strings.TrimSpace(item)

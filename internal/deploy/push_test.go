@@ -167,6 +167,7 @@ func TestNodeModeSSHCommandIncludesMetadata(t *testing.T) {
 		"'client_addr=10.200.0.2/30'",
 		"'server_addr=10.200.0.1/30'",
 		"'warp_install=reuse'",
+		"'lang=en'",
 	} {
 		if !strings.Contains(command, want) {
 			t.Fatalf("node mode command missing %q:\n%s", want, command)

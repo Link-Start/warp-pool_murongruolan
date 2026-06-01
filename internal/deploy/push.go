@@ -200,6 +200,7 @@ type ModeSwitchOptions struct {
 	DryRun         bool
 	WarpPort       int
 	AutoStartProxy bool
+	Language       string
 }
 
 type ModeSwitchResult struct {
@@ -219,6 +220,9 @@ func SwitchModeSSH(opts ModeSwitchOptions) (ModeSwitchResult, error) {
 	}
 	if opts.WarpPort == 0 {
 		opts.WarpPort = 14000
+	}
+	if opts.Language == "" {
+		opts.Language = "en"
 	}
 	if err := config.ValidateExitMode(opts.TargetMode); err != nil {
 		return ModeSwitchResult{}, err
@@ -283,8 +287,12 @@ func nodeModeSSHCommand(opts ModeSwitchOptions) string {
 	if opts.RemoveWarp {
 		removeWarp = "true"
 	}
+	language := config.NormalizeLanguage(opts.Language)
+	if language != "zh" {
+		language = "en"
+	}
 	return fmt.Sprintf(
-		"bash %s %s %s %s %s %s %s %s %s",
+		"bash %s %s %s %s %s %s %s %s %s %s",
 		shellPath(scriptPath),
 		shellPath("mode="+opts.TargetMode),
 		shellPath("node="+opts.Node.Name),
@@ -294,6 +302,7 @@ func nodeModeSSHCommand(opts ModeSwitchOptions) string {
 		shellPath("warp_install="+opts.WarpInstall),
 		shellPath("remove_warp="+removeWarp),
 		shellPath(fmt.Sprintf("transparent_port=%d", opts.WarpPort)),
+		shellPath("lang="+language),
 	)
 }
 

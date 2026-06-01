@@ -114,7 +114,7 @@ func newDeployTokenCreateCommandWithHooks(checkPort func(string, int) error, che
 			fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(language, "expires at:", "过期时间："), expiresAt.Format(time.RFC3339))
 			fmt.Fprintln(cmd.OutOrStdout(), divider)
 			fmt.Fprintln(cmd.OutOrStdout(), tr(language, "Install command:", "安装命令："))
-			installArgs := fmt.Sprintf("token=%s server=%s", tokenValue, serverURL)
+			installArgs := fmt.Sprintf("token=%s server=%s lang=%s", tokenValue, serverURL, language)
 			fmt.Fprintf(cmd.OutOrStdout(), "wget -qO- %s/install.sh | sudo bash -s -- %s\n", repoBaseURL, installArgs)
 			fmt.Fprintln(cmd.OutOrStdout(), tr(language, "or:", "或："))
 			fmt.Fprintf(cmd.OutOrStdout(), "curl -fsSL %s/install.sh | sudo bash -s -- %s\n", repoBaseURL, installArgs)

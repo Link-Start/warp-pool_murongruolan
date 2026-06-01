@@ -15,6 +15,7 @@ BASE_URL="${WARPPOOL_INSTALL_BASE_URL:-${WARPOOL_INSTALL_BASE_URL:-https://raw.g
 DRY_RUN="false"
 STATE_PATH="/etc/warppool-node/state.json"
 DOWNLOAD_DIR=""
+LANGUAGE="${WARPPOOL_LANG:-${WARPOOL_LANG:-}}"
 
 log() {
   printf '[WarpPool][node-mode] %s\n' "$*"
@@ -23,6 +24,22 @@ log() {
 fail() {
   printf '[WarpPool][node-mode][ERROR] %s\n' "$*" >&2
   exit 1
+}
+
+text() {
+  if [ "${LANGUAGE:-en}" = "zh" ]; then
+    printf '%s' "$2"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+log_i() {
+  log "$(text "$1" "$2")"
+}
+
+fail_i() {
+  fail "$(text "$1" "$2")"
 }
 
 on_error() {
@@ -69,11 +86,36 @@ parse_args() {
       transparent_port=*) TRANSPARENT_PORT="${arg#transparent_port=}" ;;
       base_url=*) BASE_URL="${arg#base_url=}" ;;
       state_path=*) STATE_PATH="${arg#state_path=}" ;;
+      lang=*|language=*) LANGUAGE="${arg#*=}" ;;
       *)
         fail "unknown argument: $arg"
         ;;
     esac
   done
+}
+
+normalize_language() {
+  case "$1" in
+    zh|zh_CN|zh-CN|cn|CN|1)
+      printf 'zh\n'
+      ;;
+    en|en_US|en-US|english|English|2|"")
+      printf 'en\n'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+normalize_current_language() {
+  local normalized
+  normalized="$(normalize_language "$LANGUAGE" 2>/dev/null || true)"
+  if [ -n "$normalized" ]; then
+    LANGUAGE="$normalized"
+  else
+    LANGUAGE="en"
+  fi
 }
 
 run() {
@@ -148,6 +190,8 @@ load_state() {
   [ -n "$WG_DEVICE" ] || WG_DEVICE="$(json_get wg_device "$STATE_PATH" || true)"
   [ -n "$WG_SERVER_ADDR" ] || WG_SERVER_ADDR="$(json_get wg_server_address "$STATE_PATH" || true)"
   [ -n "$WG_CLIENT_ADDR" ] || WG_CLIENT_ADDR="$(json_get wg_client_address "$STATE_PATH" || true)"
+  [ -n "$LANGUAGE" ] || LANGUAGE="$(json_get language "$STATE_PATH" || true)"
+  normalize_current_language
 }
 
 prompt_server_if_needed() {
@@ -155,19 +199,19 @@ prompt_server_if_needed() {
     return 0
   fi
   if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
-    fail "server URL is missing; pass server=http://<main-server>:<port>"
+    fail_i "server URL is missing; pass server=http://<main-server>:<port>" "缺少主服务器地址；请传入 server=http://<主服务器>:<端口>"
   fi
   local host port
-  printf 'Main server IP/domain: ' >/dev/tty
+  printf '%s' "$(text "Main server IP/domain: " "主服务器 IP/域名: ")" >/dev/tty
   read -r host </dev/tty
-  [ -n "$host" ] || fail "main server IP/domain is required"
+  [ -n "$host" ] || fail_i "main server IP/domain is required" "主服务器 IP/域名不能为空"
   port="8080"
   case "$host" in
     *[!0-9.]*)
       port="80"
       ;;
   esac
-  printf 'Main server registration port [%s]: ' "$port" >/dev/tty
+  printf '%s' "$(text "Main server registration port [$port]: " "主服务器注册端口 [$port]: ")" >/dev/tty
   read -r input </dev/tty
   port="${input:-$port}"
   SERVER="http://$host:$port"
@@ -206,9 +250,9 @@ fetch_mode_task() {
   if [ -z "$TOKEN" ]; then
     return 0
   fi
-  [ "$SERVER" != "skip" ] || fail "server=skip cannot be used with token mode"
+  [ "$SERVER" != "skip" ] || fail_i "server=skip cannot be used with token mode" "token 模式不能使用 server=skip"
   prompt_server_if_needed
-  log "fetching mode switch task from WarpPool server"
+  log_i "fetching mode switch task from WarpPool server" "正在从 WarpPool 主服务器获取切换任务"
   local response
   response="$(curl -fsS \
     -X POST \
@@ -234,8 +278,8 @@ download_script() {
   local name="$1"
   local target="$2"
   require_command curl
-  log "downloading $name from $BASE_URL" >&2
-  curl -fsSL "$BASE_URL/$name" -o "$target" || fail "failed to download $name from $BASE_URL"
+  log_i "downloading $name from $BASE_URL" "正在从 $BASE_URL 下载 $name" >&2
+  curl -fsSL "$BASE_URL/$name" -o "$target" || fail_i "failed to download $name from $BASE_URL" "从 $BASE_URL 下载 $name 失败"
   chmod 0755 "$target"
 }
 
@@ -381,11 +425,11 @@ remove_warp_package() {
     return 0
   fi
   if command -v apt-get >/dev/null 2>&1; then
-    log "removing Cloudflare WARP package"
+    log_i "removing Cloudflare WARP package" "正在卸载 Cloudflare WARP 软件包"
     run env DEBIAN_FRONTEND=noninteractive apt-get remove -y cloudflare-warp
     return 0
   fi
-  log "warning: automatic WARP removal is only implemented for apt-based systems"
+  log_i "warning: automatic WARP removal is only implemented for apt-based systems" "警告：自动卸载 WARP 当前只支持 apt 系统"
 }
 
 write_state() {
@@ -402,7 +446,8 @@ write_state() {
   "wg_device": "$WG_DEVICE",
   "wg_server_address": "$WG_SERVER_ADDR",
   "wg_client_address": "$WG_CLIENT_ADDR",
-  "last_mode": "$MODE"
+  "last_mode": "$MODE",
+  "language": "$LANGUAGE"
 }
 EOF
   chmod 0600 "$STATE_PATH"
@@ -412,7 +457,7 @@ complete_task() {
   if [ -z "$TOKEN" ] || [ -z "$SERVER" ] || [ "$SERVER" = "skip" ]; then
     return 0
   fi
-  log "reporting mode switch completion"
+  log_i "reporting mode switch completion" "正在上报模式切换完成状态"
   run curl -fsS \
     -X POST \
     -H 'Content-Type: application/json' \
@@ -428,7 +473,7 @@ validate_metadata() {
 }
 
 switch_to_warp() {
-  log "switching node to warp mode"
+  log_i "switching node to warp mode" "正在将节点切换到 warp 模式"
   ensure_warp_ready
   strip_warppool_post_hooks
   remove_direct_forwarding
@@ -436,7 +481,7 @@ switch_to_warp() {
 }
 
 switch_to_direct() {
-  log "switching node to direct mode"
+  log_i "switching node to direct mode" "正在将节点切换到 direct 模式"
   disable_warp_forwarding
   strip_warppool_post_hooks
   append_direct_hooks
@@ -446,6 +491,7 @@ switch_to_direct() {
 
 main() {
   parse_args "$@"
+  normalize_current_language
   validate_args
   require_root
   load_state
@@ -461,7 +507,7 @@ main() {
   esac
   write_state
   complete_task
-  log "node mode switch completed: $MODE"
+  log_i "node mode switch completed: $MODE" "节点模式切换完成：$MODE"
 }
 
 main "$@"

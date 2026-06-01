@@ -518,11 +518,11 @@ dispatch_child_script() {
     log_i "dispatching to $CHILD_SCRIPT, mode=$MODE" "切换到 $CHILD_SCRIPT，模式=$MODE"
   fi
   if [ "$DRY_RUN" = "true" ]; then
-    bash "$child" --dry-run "mode=$MODE" "token=$TOKEN" "server=$SERVER" "endpoint=$ENDPOINT" "wg_listen_port=$WG_LISTEN_PORT" "wg_endpoint_port=$WG_ENDPOINT_PORT"
+    bash "$child" --dry-run "mode=$MODE" "token=$TOKEN" "server=$SERVER" "endpoint=$ENDPOINT" "wg_listen_port=$WG_LISTEN_PORT" "wg_endpoint_port=$WG_ENDPOINT_PORT" "lang=$LANGUAGE"
     return 0
   fi
 
-  run bash "$child" "mode=$MODE" "token=$TOKEN" "server=$SERVER" "endpoint=$ENDPOINT" "wg_listen_port=$WG_LISTEN_PORT" "wg_endpoint_port=$WG_ENDPOINT_PORT"
+  run bash "$child" "mode=$MODE" "token=$TOKEN" "server=$SERVER" "endpoint=$ENDPOINT" "wg_listen_port=$WG_LISTEN_PORT" "wg_endpoint_port=$WG_ENDPOINT_PORT" "lang=$LANGUAGE"
 }
 
 main() {
