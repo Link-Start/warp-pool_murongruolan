@@ -226,10 +226,22 @@ install_new_version() {
     return 0
   fi
   mkdir -p "$INSTALL_DIR" "$LIB_DIR/assets"
-  cp "$NEW_BINARY" "$INSTALL_DIR/warppool"
-  chmod 0755 "$INSTALL_DIR/warppool"
-  find "$LIB_DIR/assets" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-  cp -R "$NEW_ASSETS/." "$LIB_DIR/assets/"
+
+  local tmp_binary tmp_assets old_assets
+  tmp_binary="$(mktemp "$INSTALL_DIR/.warppool.new.XXXXXX")"
+  cp "$NEW_BINARY" "$tmp_binary"
+  chmod 0755 "$tmp_binary"
+  mv -f "$tmp_binary" "$INSTALL_DIR/warppool"
+
+  tmp_assets="$(mktemp -d "$LIB_DIR/assets.new.XXXXXX")"
+  cp -R "$NEW_ASSETS/." "$tmp_assets/"
+  old_assets="$LIB_DIR/assets.old.$$"
+  if [ -d "$LIB_DIR/assets" ]; then
+    mv "$LIB_DIR/assets" "$old_assets"
+  fi
+  mv "$tmp_assets" "$LIB_DIR/assets"
+  rm -rf -- "$old_assets"
+
   log "installed binary: $INSTALL_DIR/warppool"
   log "installed assets: $LIB_DIR/assets"
 }
