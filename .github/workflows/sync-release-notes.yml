@@ -1,0 +1,50 @@
+name: sync-release-notes
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to sync, for example v0.1.6. Leave empty to sync all notes."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync release notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          if [ -n "$TAG" ]; then
+            notes=".github/release-notes/${TAG}.md"
+            if [ ! -s "$notes" ]; then
+              echo "missing release notes: $notes" >&2
+              exit 1
+            fi
+            gh release edit "$TAG" --repo "$REPO" --notes-file "$notes"
+            echo "synced $TAG"
+            exit 0
+          fi
+
+          for notes in .github/release-notes/v*.md; do
+            tag="$(basename "$notes" .md)"
+            if gh release view "$tag" --repo "$REPO" >/dev/null 2>&1; then
+              gh release edit "$tag" --repo "$REPO" --notes-file "$notes"
+              echo "synced $tag"
+            else
+              echo "skip missing release $tag"
+            fi
+          done
