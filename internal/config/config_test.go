@@ -69,6 +69,17 @@ func TestValidateExitMode(t *testing.T) {
 	}
 }
 
+func TestValidateWarpInstall(t *testing.T) {
+	for _, value := range []string{"", WarpInstallAuto, WarpInstallReuse, WarpInstallReinstall} {
+		if err := ValidateWarpInstall(value); err != nil {
+			t.Fatalf("expected valid warp install policy %q: %v", value, err)
+		}
+	}
+	if err := ValidateWarpInstall("ask"); err == nil {
+		t.Fatal("expected invalid warp install policy")
+	}
+}
+
 func TestValidateNodeRejectsDuplicatePort(t *testing.T) {
 	cfg := Default()
 	cfg.Nodes = append(cfg.Nodes, Node{
@@ -174,6 +185,65 @@ func TestUpdateNode(t *testing.T) {
 	}
 	if got.CreatedAt == "" || got.LastUpdated == "" {
 		t.Fatal("expected timestamps")
+	}
+}
+
+func TestNodeModeTokenLifecycle(t *testing.T) {
+	cfg := Default()
+	var err error
+	cfg, err = AddNode(cfg, Node{
+		Name:            "nat1",
+		ExitMode:        ExitModeDirect,
+		Proxy:           ProxyMixed,
+		BindHost:        "127.0.0.1",
+		LocalPort:       10013,
+		WGDevice:        "wpnat1",
+		WGServerAddress: "10.200.0.1/30",
+		WGClientAddress: "10.200.0.2/30",
+	})
+	if err != nil {
+		t.Fatalf("add node: %v", err)
+	}
+
+	cfg, err = AddNodeModeToken(cfg, NodeModeToken{
+		Token:       "mode-token-1",
+		NodeName:    "nat1",
+		TargetMode:  ExitModeWarp,
+		ExpiresAt:   time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		WarpInstall: WarpInstallReuse,
+		AutoStart:   true,
+	})
+	if err != nil {
+		t.Fatalf("add node mode token: %v", err)
+	}
+	if len(cfg.ModeTokens) != 1 {
+		t.Fatalf("expected one mode token, got %d", len(cfg.ModeTokens))
+	}
+
+	_, item, err := FindNodeModeToken(cfg, "mode-token-1", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("find node mode token: %v", err)
+	}
+	if item.Node.WGDevice != "wpnat1" || item.WarpInstall != WarpInstallReuse {
+		t.Fatalf("unexpected mode token: %#v", item)
+	}
+
+	next, node, err := CompleteNodeModeToken(cfg, "mode-token-1", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("complete node mode token: %v", err)
+	}
+	if node.ExitMode != ExitModeWarp {
+		t.Fatalf("expected node mode warp, got %s", node.ExitMode)
+	}
+	got, ok := FindNode(next, "nat1")
+	if !ok || got.ExitMode != ExitModeWarp {
+		t.Fatalf("node not updated: %#v", next.Nodes)
+	}
+	if !next.ModeTokens[0].Used || !next.ModeTokens[0].Completed {
+		t.Fatalf("mode token not completed: %#v", next.ModeTokens[0])
+	}
+	if got := NodeModeTokenStatusOf(next.ModeTokens[0], time.Now().UTC()); got != NodeModeTokenStatusCompleted {
+		t.Fatalf("expected completed status, got %s", got)
 	}
 }
 

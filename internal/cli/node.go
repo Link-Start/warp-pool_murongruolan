@@ -3,12 +3,16 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"runtime"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/murongruolan/warp-pool/internal/config"
+	"github.com/murongruolan/warp-pool/internal/deploy"
 	"github.com/murongruolan/warp-pool/internal/singbox"
+	"github.com/murongruolan/warp-pool/internal/token"
 	"github.com/murongruolan/warp-pool/internal/wgclient"
 	"github.com/spf13/cobra"
 )
@@ -25,6 +29,8 @@ func newNodeCommand() *cobra.Command {
 	cmd.AddCommand(newNodeStartCommand())
 	cmd.AddCommand(newNodeStopCommand())
 	cmd.AddCommand(newNodeStatusCommand())
+	cmd.AddCommand(newNodeModeCommand())
+	cmd.AddCommand(newNodeModeTokenCommand())
 	cmd.AddCommand(newNodeRemoveCommand())
 	return cmd
 }
@@ -195,6 +201,359 @@ func newNodeStatusCommand() *cobra.Command {
 		},
 	}
 	return cmd
+}
+
+func newNodeModeCommand() *cobra.Command {
+	var method string
+	var printCommand bool
+	var repoBaseURL string
+	var publicHost string
+	var ttl time.Duration
+	var warpInstall string
+	var removeWarp bool
+	var dryRun bool
+	var autoStartListener bool
+	var ssh deploy.SSHOptions
+	var remoteDir string
+	var assetsDir string
+	var warpPort int
+
+	cmd := &cobra.Command{
+		Use:   "mode <name> <direct|warp>",
+		Short: "Switch node exit mode",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := resolvedConfigPath()
+			cfg, err := config.Load(path)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			language := cfgLanguage(cfg)
+			prompt := newPromptIOWithLanguage(cmd.OutOrStdout(), language)
+
+			node, ok := config.FindNode(cfg, args[0])
+			if !ok {
+				return fmt.Errorf("node not found: %s", args[0])
+			}
+			targetMode := strings.TrimSpace(args[1])
+			if err := config.ValidateExitMode(targetMode); err != nil {
+				return err
+			}
+			if warpInstall == "" {
+				warpInstall = config.WarpInstallAuto
+			}
+			if targetMode != config.ExitModeWarp {
+				warpInstall = config.WarpInstallAuto
+			}
+			if err := config.ValidateWarpInstall(warpInstall); err != nil {
+				return err
+			}
+			if targetMode != config.ExitModeWarp && cmd.Flags().Changed("warp-install") {
+				return fmt.Errorf("--warp-install only applies when target mode is warp")
+			}
+			if targetMode != config.ExitModeDirect && removeWarp {
+				return fmt.Errorf("--remove-warp only applies when target mode is direct")
+			}
+			if targetMode == node.ExitMode && !removeWarp && warpInstall != config.WarpInstallReinstall {
+				fmt.Fprintln(cmd.OutOrStdout(), tr(language, "node already uses target mode", "节点已经是目标出口模式"))
+				return nil
+			}
+
+			method = strings.TrimSpace(method)
+			if method == "" {
+				if printCommand {
+					method = "pull"
+				} else {
+					method, err = prompt.askMenu(tr(language, "Switch method", "切换方式"), method, "pull", []menuOption{
+						{Label: tr(language, "pull - print command for the exit node", "pull - 输出子节点执行命令"), Value: "pull"},
+						{Label: tr(language, "ssh - connect to the exit node automatically", "ssh - 自动 SSH 连接子节点"), Value: "ssh"},
+					})
+					if err != nil {
+						return err
+					}
+				}
+			}
+
+			switch method {
+			case "pull":
+				return runNodeModePull(cmd, path, cfg, node, targetMode, nodeModePullOptions{
+					Language:          language,
+					PublicHost:        publicHost,
+					RepoBaseURL:       repoBaseURL,
+					TTL:               ttl,
+					WarpInstall:       warpInstall,
+					RemoveWarp:        removeWarp,
+					PrintCommand:      printCommand,
+					AutoStartListener: autoStartListener,
+					Prompt:            prompt,
+				})
+			case "ssh":
+				return runNodeModeSSH(cmd, path, cfg, node, targetMode, nodeModeSSHOptions{
+					Language:    language,
+					Prompt:      prompt,
+					SSH:         ssh,
+					RemoteDir:   remoteDir,
+					AssetsDir:   assetsDir,
+					WarpInstall: warpInstall,
+					RemoveWarp:  removeWarp,
+					DryRun:      dryRun,
+					WarpPort:    warpPort,
+				})
+			default:
+				return fmt.Errorf("unsupported method %q, expected pull or ssh", method)
+			}
+		},
+	}
+
+	cmd.Flags().StringVar(&method, "method", "", "switch method: pull or ssh")
+	cmd.Flags().BoolVar(&printCommand, "print-command", false, "print exit-node command and return")
+	cmd.Flags().StringVar(&repoBaseURL, "repo-base-url", "", "installer assets base URL")
+	cmd.Flags().StringVar(&publicHost, "public-host", "", "public host/IP for generated exit-node command")
+	cmd.Flags().DurationVar(&ttl, "ttl", config.DefaultNodeModeTokenTTL, "mode switch token TTL")
+	cmd.Flags().StringVar(&warpInstall, "warp-install", config.WarpInstallAuto, "warp install policy: auto, reuse, or reinstall")
+	cmd.Flags().BoolVar(&removeWarp, "remove-warp", false, "remove WARP when switching back to direct")
+	cmd.Flags().BoolVar(&autoStartListener, "auto-start-listener", false, "start registration listener automatically without prompting")
+	cmd.Flags().StringVar(&ssh.Host, "ssh-host", "", "SSH host")
+	cmd.Flags().IntVar(&ssh.Port, "ssh-port", 0, "SSH port")
+	cmd.Flags().StringVar(&ssh.User, "ssh-user", "", "SSH user")
+	cmd.Flags().StringVar(&ssh.Password, "ssh-password", "", "SSH password, or use WARPOOL_SSH_PASSWORD")
+	cmd.Flags().StringVar(&ssh.KeyPath, "ssh-key", "", "SSH private key path")
+	cmd.Flags().StringVar(&ssh.KnownHostsPath, "known-hosts", "", "known_hosts file path")
+	cmd.Flags().BoolVar(&ssh.InsecureIgnoreHostKey, "insecure-skip-host-key-check", false, "skip SSH host key verification")
+	cmd.Flags().StringVar(&remoteDir, "remote-dir", "/tmp/warppool-mode", "remote mode-switch directory")
+	cmd.Flags().StringVar(&assetsDir, "assets-dir", "assets", "local assets directory")
+	cmd.Flags().IntVar(&warpPort, "warp-forward-port", 14000, "remote transparent TCP redirect port for warp mode")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "validate and show mode switch plan without SSH")
+	return cmd
+}
+
+func newNodeModeTokenCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:    "mode-token",
+		Hidden: true,
+		Short:  "Manage node mode switch tokens",
+	}
+	cmd.AddCommand(newNodeModeTokenListCommand())
+	cmd.AddCommand(newNodeModeTokenPruneCommand())
+	return cmd
+}
+
+func newNodeModeTokenListCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List node mode switch tokens",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load(resolvedConfigPath())
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "NODE\tMODE\tSTATUS\tEXPIRES_AT\tTOKEN")
+			now := time.Now().UTC()
+			for _, item := range cfg.ModeTokens {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+					item.NodeName,
+					item.TargetMode,
+					config.NodeModeTokenStatusOf(item, now),
+					item.ExpiresAt,
+					shortDeployToken(item.Token),
+				)
+			}
+			return w.Flush()
+		},
+	}
+	return cmd
+}
+
+func newNodeModeTokenPruneCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "prune",
+		Short: "Remove expired unused node mode switch tokens",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := resolvedConfigPath()
+			cfg, err := config.Load(path)
+			if err != nil {
+				return fmt.Errorf("load config: %w", err)
+			}
+			cfg, removed := config.PruneExpiredNodeModeTokens(cfg, time.Now().UTC())
+			if err := config.SaveExisting(path, cfg); err != nil {
+				return fmt.Errorf("save config: %w", err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "pruned node mode tokens: %d\n", removed)
+			return nil
+		},
+	}
+	return cmd
+}
+
+type nodeModePullOptions struct {
+	Language          string
+	PublicHost        string
+	RepoBaseURL       string
+	TTL               time.Duration
+	WarpInstall       string
+	RemoveWarp        bool
+	PrintCommand      bool
+	AutoStartListener bool
+	Prompt            promptIO
+}
+
+func runNodeModePull(cmd *cobra.Command, path string, cfg config.Config, node config.Node, targetMode string, opts nodeModePullOptions) error {
+	if opts.TTL <= 0 {
+		opts.TTL = config.DefaultNodeModeTokenTTL
+	}
+	if err := ensureRegistrationListener(opts.Prompt, path, &cfg, opts.AutoStartListener, listenerHooks{}); err != nil {
+		return err
+	}
+	if err := checkListenReachable(cfg.Listen.Host, cfg.Listen.Port); err != nil {
+		return err
+	}
+
+	tokenValue, err := token.New()
+	if err != nil {
+		return err
+	}
+	expiresAt := time.Now().UTC().Add(opts.TTL)
+	cfg, err = config.AddNodeModeToken(cfg, config.NodeModeToken{
+		Token:       tokenValue,
+		NodeName:    node.Name,
+		TargetMode:  targetMode,
+		Node:        node,
+		ExpiresAt:   expiresAt.Format(time.RFC3339),
+		WarpInstall: opts.WarpInstall,
+		RemoveWarp:  opts.RemoveWarp,
+		AutoStart:   true,
+	})
+	if err != nil {
+		return err
+	}
+	if err := config.SaveExisting(path, cfg); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+
+	publicHost := opts.PublicHost
+	if publicHost == "" {
+		publicHost = cfg.Listen.PublicHost
+	}
+	if publicHost == "" {
+		publicHost = cfg.Listen.Host
+	}
+	serverURL := listenURL(publicHost, cfg.Listen.Port)
+	if opts.RepoBaseURL == "" {
+		opts.RepoBaseURL = "https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets"
+	}
+	command := fmt.Sprintf("curl -fsSL %s/node_mode.sh | sudo bash -s -- token=%s", opts.RepoBaseURL, tokenValue)
+	if opts.PrintCommand {
+		fmt.Fprintln(cmd.OutOrStdout(), command)
+		return nil
+	}
+
+	divider := "======================"
+	fmt.Fprintln(cmd.OutOrStdout(), divider)
+	fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(opts.Language, "Node:", "节点："), node.Name)
+	fmt.Fprintf(cmd.OutOrStdout(), "%s %s -> %s\n", tr(opts.Language, "Mode:", "出口模式："), node.ExitMode, targetMode)
+	fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(opts.Language, "expires at:", "过期时间："), expiresAt.Format(time.RFC3339))
+	fmt.Fprintln(cmd.OutOrStdout(), divider)
+	fmt.Fprintln(cmd.OutOrStdout(), tr(opts.Language, "Run this command on the exit node:", "请在出口节点执行以下命令："))
+	fmt.Fprintln(cmd.OutOrStdout(), command)
+	fmt.Fprintln(cmd.OutOrStdout(), tr(opts.Language, "If the exit node has no saved server state, run:", "如果出口节点没有保存主服务器状态，请执行："))
+	fmt.Fprintf(cmd.OutOrStdout(), "curl -fsSL %s/node_mode.sh | sudo bash -s -- token=%s server=%s\n", opts.RepoBaseURL, tokenValue, serverURL)
+	fmt.Fprintln(cmd.OutOrStdout(), divider)
+	return nil
+}
+
+type nodeModeSSHOptions struct {
+	Language    string
+	Prompt      promptIO
+	SSH         deploy.SSHOptions
+	RemoteDir   string
+	AssetsDir   string
+	WarpInstall string
+	RemoveWarp  bool
+	DryRun      bool
+	WarpPort    int
+}
+
+func runNodeModeSSH(cmd *cobra.Command, path string, cfg config.Config, node config.Node, targetMode string, opts nodeModeSSHOptions) error {
+	var err error
+	opts.SSH.Host, err = opts.Prompt.askRequired(tr(opts.Language, "SSH host/IP", "SSH 主机/IP"), opts.SSH.Host)
+	if err != nil {
+		return err
+	}
+	opts.SSH.Port, err = opts.Prompt.askInt(tr(opts.Language, "SSH port", "SSH 端口"), opts.SSH.Port, 22)
+	if err != nil {
+		return err
+	}
+	opts.SSH.User, err = opts.Prompt.askString(tr(opts.Language, "SSH user", "SSH 用户"), opts.SSH.User, "root")
+	if err != nil {
+		return err
+	}
+	if opts.SSH.KnownHostsPath == "" && !opts.SSH.InsecureIgnoreHostKey {
+		if _, statErr := os.Stat(defaultKnownHostsPath()); statErr != nil && os.IsNotExist(statErr) {
+			skip, askErr := opts.Prompt.askBool(
+				tr(opts.Language, "known_hosts file is missing. Skip SSH host key verification for this mode switch?", "未找到 known_hosts 文件。本次切换是否跳过 SSH HostKey 校验？"),
+				false,
+				true,
+			)
+			if askErr != nil {
+				return askErr
+			}
+			opts.SSH.InsecureIgnoreHostKey = skip
+		}
+	}
+	if opts.SSH.Password == "" {
+		opts.SSH.Password = os.Getenv("WARPOOL_SSH_PASSWORD")
+	}
+	if opts.SSH.Password == "" && opts.SSH.KeyPath == "" && !opts.DryRun {
+		password, err := promptPassword(tr(opts.Language, "SSH password: ", "SSH 密码: "))
+		if err != nil {
+			return err
+		}
+		opts.SSH.Password = password
+	}
+
+	result, err := deploy.SwitchModeSSH(deploy.ModeSwitchOptions{
+		SSH:            opts.SSH,
+		Node:           node,
+		TargetMode:     targetMode,
+		RemoteDir:      opts.RemoteDir,
+		AssetsDir:      resolveAssetsDir(opts.AssetsDir),
+		WarpInstall:    opts.WarpInstall,
+		RemoveWarp:     opts.RemoveWarp,
+		DryRun:         opts.DryRun,
+		WarpPort:       opts.WarpPort,
+		AutoStartProxy: true,
+	})
+	for _, item := range result.Logs {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), item)
+	}
+	if err != nil {
+		return err
+	}
+	if opts.DryRun {
+		fmt.Fprintf(cmd.OutOrStdout(), "validated node mode switch: %s -> %s\n", node.Name, targetMode)
+		return nil
+	}
+
+	node.ExitMode = targetMode
+	next, err := config.UpdateNode(cfg, node)
+	if err != nil {
+		return err
+	}
+	if err := config.SaveExisting(path, next); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+	if err := startProxyForNode(path, next, node); err != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "%s\n", tr(opts.Language, "warning: mode switched but failed to restart local proxy service: "+err.Error(), "警告：出口模式已切换，但重启本地代理服务失败："+err.Error()))
+	} else {
+		fmt.Fprintf(cmd.OutOrStdout(), "%s\n", tr(opts.Language, "local proxy service restarted", "本地代理服务已重启"))
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "%s %s -> %s\n", tr(opts.Language, "switched node mode:", "节点出口模式已切换："), node.Name, targetMode)
+	return nil
 }
 
 func printNodeDetails(out interface{ Write([]byte) (int, error) }, language string, node config.Node, includeRuntime bool) error {

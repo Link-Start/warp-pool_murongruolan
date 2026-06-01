@@ -323,11 +323,24 @@ warppool node show nat01 # Show node nat01 details and runtime status
 warppool node start nat01 # Start local proxy service for nat01 and enable autostart
 warppool node stop nat01 # Stop local proxy service
 warppool node status nat01 # Show node nat01 runtime status
+warppool node mode nat01 warp # Switch nat01 to WARP egress; auto-detect and install/reuse WARP
+warppool node mode nat01 direct # Switch nat01 back to direct egress
 warppool remove nat01 # Remove node nat01 record only
 warppool node remove nat01 --clean-wg # Remove node nat01 and delete local WG client config
 ```
 
 `remove` only removes the node record. Add `--clean-wg` when you also want to stop and delete the local WireGuard client config on the main server.
+
+`warppool node mode` defaults to Pull mode and prints a command to run on the exit node. The exit node detects WARP automatically: reuse it when already installed, otherwise install it. Advanced options:
+
+```bash
+warppool node mode nat01 warp --warp-install reuse # Reuse existing WARP only; fail if missing
+warppool node mode nat01 warp --warp-install reinstall # Force reinstall WARP
+warppool node mode nat01 direct --remove-warp # Remove WARP after switching back to direct
+warppool node mode nat01 warp --method ssh # Switch automatically over SSH
+```
+
+Pull mode first reads `/etc/warppool-node/state.json` on the exit node, so normally you do not need to enter the main server address again. For old nodes without this state file, the script prompts for the server address, or you can use the fallback command printed by the main server with `server=http://<main-server-ip>:<port>`.
 
 ### WireGuard
 

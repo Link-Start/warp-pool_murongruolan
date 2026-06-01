@@ -293,9 +293,22 @@ warppool node show nat01 # 查看节点nat01信息和运行状态
 warppool node start nat01 # 启动节点nat01对应的本地代理服务并设置开机自启
 warppool node stop nat01 # 停止本地代理服务
 warppool node status nat01 # 查看节点nat01运行状态
+warppool node mode nat01 warp # 将节点nat01切换为WARP出口，默认自动检测并安装/复用WARP
+warppool node mode nat01 direct # 将节点nat01切换回直连出口
 warppool remove nat01 # 移除节点nat01 仅移除记录
 warppool node remove nat01 --clean-wg # 移除节点nat01 并WG删除客户端配置
 ```
+
+`warppool node mode` 默认使用 Pull 方式生成一条需要在出口节点执行的命令。出口节点会自动检测 WARP：已安装则复用，未安装则自动安装。也可以指定：
+
+```bash
+warppool node mode nat01 warp --warp-install reuse # 只复用已安装的WARP，未安装则报错
+warppool node mode nat01 warp --warp-install reinstall # 强制重装WARP
+warppool node mode nat01 direct --remove-warp # 切回直连后同时卸载WARP
+warppool node mode nat01 warp --method ssh # 通过SSH自动切换，不需要手动复制命令
+```
+
+Pull 切换命令会优先读取出口节点上的 `/etc/warppool-node/state.json`，正常情况下不需要再次填写主服务器地址；旧节点没有该状态文件时，脚本会提示手动填写，或按主服务器输出的备用命令携带 `server=http://<主服务器IP>:<端口>` 执行。
 
 ### WireGuard相关
 

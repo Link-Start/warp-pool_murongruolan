@@ -146,6 +146,34 @@ func TestInstallRemoteNodeUninstallerCommandPathEscapesRemoteDir(t *testing.T) {
 	}
 }
 
+func TestNodeModeSSHCommandIncludesMetadata(t *testing.T) {
+	command := nodeModeSSHCommand(ModeSwitchOptions{
+		Node: config.Node{
+			Name:            "nat1",
+			WGDevice:        "wpnat1",
+			WGServerAddress: "10.200.0.1/30",
+			WGClientAddress: "10.200.0.2/30",
+		},
+		TargetMode:  config.ExitModeWarp,
+		RemoteDir:   "/tmp/custom dir",
+		WarpInstall: config.WarpInstallReuse,
+		WarpPort:    14000,
+	})
+	for _, want := range []string{
+		"'/tmp/custom dir/node_mode.sh'",
+		"'mode=warp'",
+		"'node=nat1'",
+		"'device=wpnat1'",
+		"'client_addr=10.200.0.2/30'",
+		"'server_addr=10.200.0.1/30'",
+		"'warp_install=reuse'",
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("node mode command missing %q:\n%s", want, command)
+		}
+	}
+}
+
 func wireguardPlan() wireguard.Plan {
 	return wireguard.Plan{
 		Device:        "wpnat-warp",

@@ -189,6 +189,114 @@ func configureRemoteWarpForwarding(client *sshclient.Client, plan wireguard.Plan
 	return nil
 }
 
+type ModeSwitchOptions struct {
+	SSH            SSHOptions
+	Node           config.Node
+	TargetMode     string
+	RemoteDir      string
+	AssetsDir      string
+	WarpInstall    string
+	RemoveWarp     bool
+	DryRun         bool
+	WarpPort       int
+	AutoStartProxy bool
+}
+
+type ModeSwitchResult struct {
+	Node config.Node
+	Logs []string
+}
+
+func SwitchModeSSH(opts ModeSwitchOptions) (ModeSwitchResult, error) {
+	if opts.RemoteDir == "" {
+		opts.RemoteDir = "/tmp/warppool-mode"
+	}
+	if opts.AssetsDir == "" {
+		opts.AssetsDir = "assets"
+	}
+	if opts.WarpInstall == "" {
+		opts.WarpInstall = config.WarpInstallAuto
+	}
+	if opts.WarpPort == 0 {
+		opts.WarpPort = 14000
+	}
+	if err := config.ValidateExitMode(opts.TargetMode); err != nil {
+		return ModeSwitchResult{}, err
+	}
+	if err := config.ValidateWarpInstall(opts.WarpInstall); err != nil {
+		return ModeSwitchResult{}, err
+	}
+	if opts.Node.WGDevice == "" || opts.Node.WGServerAddress == "" || opts.Node.WGClientAddress == "" {
+		return ModeSwitchResult{}, fmt.Errorf("node %s has incomplete WireGuard metadata; deploy it first", opts.Node.Name)
+	}
+
+	result := ModeSwitchResult{Node: opts.Node}
+	if opts.DryRun {
+		result.Logs = append(result.Logs, "dry-run: skip ssh connect")
+		result.Logs = append(result.Logs, fmt.Sprintf("dry-run: upload assets to %s", opts.RemoteDir))
+		result.Logs = append(result.Logs, "dry-run: run node_mode.sh with local metadata")
+		result.Node.ExitMode = opts.TargetMode
+		return result, nil
+	}
+
+	client, err := sshclient.Dial(sshclient.Config{
+		Host: opts.SSH.Host,
+		Port: opts.SSH.Port,
+		User: opts.SSH.User,
+		Auth: sshclient.Auth{
+			Password: opts.SSH.Password,
+			KeyPath:  opts.SSH.KeyPath,
+		},
+		Timeout:               20 * time.Second,
+		KnownHostsPath:        opts.SSH.KnownHostsPath,
+		InsecureIgnoreHostKey: opts.SSH.InsecureIgnoreHostKey,
+	})
+	if err != nil {
+		return result, err
+	}
+	defer client.Close()
+
+	uploadResult := PushResult{}
+	if err := uploadAssets(client, opts.AssetsDir, opts.RemoteDir, &uploadResult); err != nil {
+		return result, err
+	}
+	result.Logs = append(result.Logs, uploadResult.Logs...)
+
+	command := nodeModeSSHCommand(opts)
+	remoteResult, err := client.Run(command)
+	if remoteResult.Stdout != "" {
+		result.Logs = append(result.Logs, remoteResult.Stdout)
+	}
+	if remoteResult.Stderr != "" {
+		result.Logs = append(result.Logs, remoteResult.Stderr)
+	}
+	if err != nil {
+		return result, err
+	}
+	result.Node.ExitMode = opts.TargetMode
+	return result, nil
+}
+
+func nodeModeSSHCommand(opts ModeSwitchOptions) string {
+	scriptPath := filepath.ToSlash(filepath.Join(opts.RemoteDir, "node_mode.sh"))
+	removeWarp := "false"
+	if opts.RemoveWarp {
+		removeWarp = "true"
+	}
+	return fmt.Sprintf(
+		"bash %s %s %s %s %s %s %s %s %s",
+		shellPath(scriptPath),
+		shellPath("mode="+opts.TargetMode),
+		shellPath("node="+opts.Node.Name),
+		shellPath("device="+opts.Node.WGDevice),
+		shellPath("client_addr="+opts.Node.WGClientAddress),
+		shellPath("server_addr="+opts.Node.WGServerAddress),
+		shellPath("warp_install="+opts.WarpInstall),
+		shellPath("remove_warp="+removeWarp),
+		shellPath(fmt.Sprintf("transparent_port=%d", opts.WarpPort)),
+	)
+}
+
 func warpForwardCommand(plan wireguard.Plan, remoteDir string, warpPort int) string {
 	scriptPath := filepath.ToSlash(filepath.Join(remoteDir, "warp_forward.sh"))
 	return fmt.Sprintf(

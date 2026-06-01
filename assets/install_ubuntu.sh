@@ -9,6 +9,8 @@ WG_LISTEN_PORT="51820"
 WG_ENDPOINT_PORT=""
 DRY_RUN="false"
 NODE_EXIT_MODE=""
+SERVER_URL_FOR_STATE=""
+NODE_NAME=""
 
 log() {
   printf '[WarpPool][ubuntu] %s\n' "$*"
@@ -195,6 +197,37 @@ write_remote_config() {
   fi
 }
 
+extract_node_name() {
+  local response="$1"
+  NODE_NAME_B64=""
+  eval "$response"
+  NODE_NAME="$(printf '%s' "$NODE_NAME_B64" | decode_b64)"
+}
+
+write_node_state() {
+  if [ -z "$SERVER" ] || [ -z "$WG_DEVICE" ]; then
+    return 0
+  fi
+  SERVER_URL_FOR_STATE="$SERVER"
+  run mkdir -p /etc/warppool-node
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: write /etc/warppool-node/state.json"
+    return 0
+  fi
+  cat >/etc/warppool-node/state.json <<EOF
+{
+  "server_url": "$SERVER_URL_FOR_STATE",
+  "node_name": "$NODE_NAME",
+  "wg_device": "$WG_DEVICE",
+  "wg_server_address": "$WG_SERVER_ADDR",
+  "wg_client_address": "$WG_CLIENT_ADDR",
+  "last_mode": "$MODE"
+}
+EOF
+  chmod 0600 /etc/warppool-node/state.json
+  log "saved node state: /etc/warppool-node/state.json"
+}
+
 detect_egress_interface() {
   ip route show default 0.0.0.0/0 | awk 'NR==1 {for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}'
 }
@@ -283,6 +316,7 @@ register_node() {
     -H 'Content-Type: application/json' \
     -d "{\"token\":\"$TOKEN\",\"endpoint\":\"$ENDPOINT\",\"endpoint_port\":$WG_ENDPOINT_PORT,\"server_private_key\":\"$SERVER_PRIVATE_KEY\",\"server_public_key\":\"$SERVER_PUBLIC_KEY\",\"listen_port\":$WG_LISTEN_PORT}" \
     "$SERVER/register/prepare?format=sh")" || fail "register prepare failed"
+  extract_node_name "$response"
   write_remote_config "$response"
 }
 
@@ -299,6 +333,7 @@ main() {
     start_remote_wireguard
     enable_direct_forwarding
     maybe_enable_warp_forwarding
+    write_node_state
     log "completing node registration"
     run curl -fsS \
       -X POST \

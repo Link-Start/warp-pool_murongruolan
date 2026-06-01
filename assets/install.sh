@@ -501,6 +501,7 @@ prepare_child_script() {
   download_script "warp_forward.sh" "$DOWNLOAD_DIR/warp_forward.sh"
   download_script "singbox_install.sh" "$DOWNLOAD_DIR/singbox_install.sh"
   download_script "node_uninstall.sh" "$DOWNLOAD_DIR/node_uninstall.sh"
+  download_script "node_mode.sh" "$DOWNLOAD_DIR/node_mode.sh"
   printf '%s\n' "$child"
 }
 

@@ -294,7 +294,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+ExecStartPre=/bin/sh -c 'iptables -C INPUT -i $DEVICE -p tcp -j ACCEPT 2>/dev/null || iptables -A INPUT -i $DEVICE -p tcp -j ACCEPT'
+ExecStartPre=/bin/sh -c 'iptables -t nat -C PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT 2>/dev/null || iptables -t nat -A PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT'
 ExecStart=$SINGBOX_BIN run -c $CONFIG_PATH
+ExecStopPost=/bin/sh -c 'while iptables -t nat -C PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT >/dev/null 2>&1; do iptables -t nat -D PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT; done; while iptables -C INPUT -i $DEVICE -p tcp -j ACCEPT >/dev/null 2>&1; do iptables -D INPUT -i $DEVICE -p tcp -j ACCEPT; done'
 Restart=on-failure
 RestartSec=3
 
