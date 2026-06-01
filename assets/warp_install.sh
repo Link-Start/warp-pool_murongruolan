@@ -22,6 +22,7 @@ fail() {
 on_error() {
   local status=$?
   local line="$1"
+  cleanup_package_cache >/dev/null 2>&1 || true
   printf '[WarpPool][warp][ERROR] command failed with exit %s at line %s: %s\n' "$status" "$line" "$BASH_COMMAND" >&2
   exit "$status"
 }
@@ -56,6 +57,17 @@ run() {
     return 0
   fi
   "$@"
+}
+
+cleanup_package_cache() {
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: clean apt cache"
+    return 0
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get clean >/dev/null 2>&1 || true
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/* 2>/dev/null || true
+  fi
 }
 
 validate_non_negative_int() {
@@ -193,10 +205,39 @@ warp_installed() {
   command -v warp-cli >/dev/null 2>&1
 }
 
-install_cloudflare_repo_debian_like() {
+repo_tools_ready() {
+  command -v curl >/dev/null 2>&1 &&
+    command -v gpg >/dev/null 2>&1 &&
+    [ -r /etc/ssl/certs/ca-certificates.crt ]
+}
+
+ensure_repo_tools_debian_like() {
+  if repo_tools_ready; then
+    return 0
+  fi
+
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: install WARP repository tools: curl ca-certificates gpg"
+    return 0
+  fi
+
+  preflight_basic_disk_space
+  log "installing WARP repository tools"
+  env DEBIAN_FRONTEND=noninteractive apt-get update
+  if ! env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates gpg; then
+    log "warning: failed to install package 'gpg', retrying with 'gnupg'"
+    env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates gnupg
+  fi
+  cleanup_package_cache
+
   require_command curl
   require_command gpg
+  if [ ! -r /etc/ssl/certs/ca-certificates.crt ]; then
+    fail "ca-certificates bundle not found after installing repository tools"
+  fi
+}
 
+install_cloudflare_repo_debian_like() {
   local keyring="/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg"
   local list="/etc/apt/sources.list.d/cloudflare-client.list"
   local codename
@@ -226,16 +267,18 @@ install_cloudflare_repo_debian_like() {
     return 0
   fi
 
-  preflight_basic_disk_space
+  ensure_repo_tools_debian_like
   curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor -o "$keyring"
   echo "deb [signed-by=$keyring] https://pkg.cloudflareclient.com/ $codename main" >"$list"
 
   env DEBIAN_FRONTEND=noninteractive apt-get update
   preflight_warp_install_space
-  if ! env DEBIAN_FRONTEND=noninteractive apt-get install -y cloudflare-warp; then
+  if ! env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cloudflare-warp; then
+    cleanup_package_cache
     log_disk_status
     fail "Cloudflare WARP package install failed. If the output says 'Disk quota exceeded', free disk space/quota and repair apt with: apt-get clean && dpkg --configure -a && apt-get -f install"
   fi
+  cleanup_package_cache
 }
 
 register_and_connect() {
