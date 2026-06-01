@@ -1,6 +1,7 @@
 package singbox
 
 import (
+	"crypto/sha1"
 	"encoding/json"
 	"fmt"
 	"net/netip"
@@ -118,7 +119,7 @@ func BuildJSON(cfg config.Config, opts Options) ([]byte, error) {
 }
 
 func InboundTag(nodeName string) string {
-	return "in-" + safeTag(nodeName)
+	return "in-" + stableTagComponent(nodeName, 48)
 }
 
 func buildNode(node config.Node, opts Options) (Inbound, Endpoint, RouteRule, error) {
@@ -127,7 +128,7 @@ func buildNode(node config.Node, opts Options) (Inbound, Endpoint, RouteRule, er
 	}
 
 	inboundTag := InboundTag(node.Name)
-	endpointTag := "wg-" + safeTag(node.Name)
+	endpointTag := "wg-" + stableTagComponent(node.Name, 48)
 	inboundType := node.Proxy
 	if inboundType == config.ProxySocks5 {
 		inboundType = "socks"
@@ -237,9 +238,31 @@ func safeTag(name string) string {
 	return out
 }
 
+func stableTagComponent(name string, maxLen int) string {
+	base := safeTag(name)
+	hash := shortNameHash(name)
+	suffix := "-" + hash
+	if maxLen <= len(hash) {
+		return hash[:maxLen]
+	}
+	keep := maxLen - len(suffix)
+	if keep > 0 && len(base) > keep {
+		base = strings.Trim(base[:keep], "-")
+	}
+	if base == "" {
+		return hash
+	}
+	return base + suffix
+}
+
+func shortNameHash(name string) string {
+	sum := sha1.Sum([]byte(name))
+	return fmt.Sprintf("%x", sum)[:6]
+}
+
 func DefaultEndpointName(node config.Node) string {
 	if strings.TrimSpace(node.WGLocalDevice) != "" {
 		return node.WGLocalDevice
 	}
-	return "wpc-" + safeTag(node.Name)
+	return "wpc-" + stableTagComponent(node.Name, 11)
 }

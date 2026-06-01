@@ -27,7 +27,7 @@ func TestBuildConfig(t *testing.T) {
 		t.Fatalf("expected one endpoint, got %d", len(sb.Endpoints))
 	}
 	endpoint := sb.Endpoints[0]
-	if endpoint.Type != "wireguard" || endpoint.Tag != "wg-nat1" {
+	if endpoint.Type != "wireguard" || !strings.HasPrefix(endpoint.Tag, "wg-nat1-") {
 		t.Fatalf("unexpected endpoint: %#v", endpoint)
 	}
 	if endpoint.Peers[0].Address != "203.0.113.1" || endpoint.Peers[0].Port != 51821 {
@@ -36,7 +36,7 @@ func TestBuildConfig(t *testing.T) {
 	if endpoint.Peers[0].AllowedIPs[0] != "0.0.0.0/0" {
 		t.Fatalf("unexpected allowed ips: %#v", endpoint.Peers[0].AllowedIPs)
 	}
-	if sb.Route.Rules[0].Inbound[0] != "in-nat1" || sb.Route.Rules[0].Outbound != "wg-nat1" {
+	if !strings.HasPrefix(sb.Route.Rules[0].Inbound[0], "in-nat1-") || sb.Route.Rules[0].Outbound != endpoint.Tag {
 		t.Fatalf("unexpected route rule: %#v", sb.Route.Rules[0])
 	}
 }
@@ -67,14 +67,36 @@ func TestBuildUsesLocalEndpointNameFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build config: %v", err)
 	}
-	if sb.Endpoints[0].Name != "wpc-nat1" {
+	if !strings.HasPrefix(sb.Endpoints[0].Name, "wpc-nat1-") {
 		t.Fatalf("unexpected endpoint name: %s", sb.Endpoints[0].Name)
 	}
 }
 
 func TestInboundTag(t *testing.T) {
-	if got := InboundTag("US1"); got != "in-us1" {
+	if got := InboundTag("US1"); !strings.HasPrefix(got, "in-us1-") {
 		t.Fatalf("unexpected inbound tag: %s", got)
+	}
+}
+
+func TestBuildAvoidsDuplicateTagsForNonASCIINameCollision(t *testing.T) {
+	cfg := config.Default()
+	a := testNode()
+	a.Name = "美国1"
+	a.LocalPort = 10121
+	b := testNode()
+	b.Name = "圣保罗1"
+	b.LocalPort = 10122
+	cfg.Nodes = []config.Node{a, b}
+
+	sb, err := Build(cfg, Options{})
+	if err != nil {
+		t.Fatalf("build config: %v", err)
+	}
+	if sb.Inbounds[0].Tag == sb.Inbounds[1].Tag {
+		t.Fatalf("duplicate inbound tags: %s", sb.Inbounds[0].Tag)
+	}
+	if sb.Endpoints[0].Tag == sb.Endpoints[1].Tag {
+		t.Fatalf("duplicate endpoint tags: %s", sb.Endpoints[0].Tag)
 	}
 }
 
