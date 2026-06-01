@@ -3,8 +3,10 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/murongruolan/warp-pool/internal/config"
 	"github.com/murongruolan/warp-pool/internal/singbox"
@@ -273,7 +275,10 @@ func startProxyService(configPath string, restartingNode *config.Node) error {
 	if err := runSystemctl("enable", "warppool-proxy.service"); err != nil {
 		return err
 	}
-	return runSystemctl("restart", "warppool-proxy.service")
+	if err := runSystemctl("restart", "warppool-proxy.service"); err != nil {
+		return err
+	}
+	return waitProxyServiceRunning(5 * time.Second)
 }
 
 func stopProxyService() error {
@@ -332,6 +337,64 @@ RestartSec=3s
 [Install]
 WantedBy=multi-user.target
 `, envLine, systemdEscapeArg(warppoolBin), systemdEscapeArg(configPath))
+}
+
+func waitProxyServiceRunning(timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	var lastStatus singbox.StatusResult
+	var lastErr error
+	for time.Now().Before(deadline) {
+		status, err := singbox.Status(singbox.ManagerOptions{})
+		if err == nil && status.Running {
+			return nil
+		}
+		lastStatus = status
+		lastErr = err
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	base := "local proxy service failed to start"
+	if lastErr != nil {
+		base = fmt.Sprintf("%s: %v", base, lastErr)
+	} else if strings.TrimSpace(lastStatus.Message) != "" {
+		base = fmt.Sprintf("%s: %s", base, lastStatus.Message)
+	}
+	details := proxyServiceDiagnostics()
+	if strings.TrimSpace(details) == "" {
+		return fmt.Errorf("%s", base)
+	}
+	return fmt.Errorf("%s\n%s", base, details)
+}
+
+func proxyServiceDiagnostics() string {
+	sections := []string{}
+	for _, item := range []struct {
+		title   string
+		command string
+		args    []string
+	}{
+		{
+			title:   "systemctl status warppool-proxy.service",
+			command: "systemctl",
+			args:    []string{"status", "warppool-proxy.service", "--no-pager", "-l"},
+		},
+		{
+			title:   "journalctl -u warppool-proxy.service",
+			command: "journalctl",
+			args:    []string{"-u", "warppool-proxy.service", "-n", "120", "--no-pager"},
+		},
+	} {
+		out, _ := exec.Command(item.command, item.args...).CombinedOutput()
+		text := strings.TrimSpace(string(out))
+		if text == "" {
+			continue
+		}
+		sections = append(sections, "== "+item.title+" ==\n"+text)
+	}
+	return strings.Join(sections, "\n\n")
 }
 
 func addProxyManagerFlags(cmd *cobra.Command, opts *singbox.ManagerOptions) {
