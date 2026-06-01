@@ -3,12 +3,14 @@ set -Eeuo pipefail
 
 POLICY="auto"
 DRY_RUN="false"
-MIN_WARP_FREE_MB="${WARPPOOL_WARP_MIN_FREE_MB:-${WARPOOL_WARP_MIN_FREE_MB:-1200}}"
-MIN_APT_CACHE_FREE_MB="${WARPPOOL_WARP_MIN_APT_CACHE_MB:-${WARPOOL_WARP_MIN_APT_CACHE_MB:-300}}"
+MIN_WARP_FREE_MB="${WARPPOOL_WARP_MIN_FREE_MB:-${WARPOOL_WARP_MIN_FREE_MB:-350}}"
+WARN_WARP_FREE_MB="${WARPPOOL_WARP_WARN_FREE_MB:-${WARPOOL_WARP_WARN_FREE_MB:-1200}}"
+MIN_APT_CACHE_FREE_MB="${WARPPOOL_WARP_MIN_APT_CACHE_MB:-${WARPOOL_WARP_MIN_APT_CACHE_MB:-150}}"
 MIN_TMP_FREE_MB="${WARPPOOL_WARP_MIN_TMP_MB:-${WARPOOL_WARP_MIN_TMP_MB:-100}}"
 MIN_FREE_INODES="${WARPPOOL_WARP_MIN_FREE_INODES:-${WARPOOL_WARP_MIN_FREE_INODES:-5000}}"
 APT_DOWNLOAD_MB=0
 APT_INSTALL_MB=0
+APT_SPACE_ESTIMATED="false"
 
 log() {
   printf '[WarpPool][warp] %s\n' "$*"
@@ -130,6 +132,20 @@ check_free_mb() {
   fi
 }
 
+warn_free_mb() {
+  local path="$1"
+  local threshold="$2"
+  local purpose="$3"
+  local free
+  free="$(available_mb "$path" || true)"
+  if [ -z "$free" ]; then
+    return 0
+  fi
+  if [ "$free" -lt "$threshold" ]; then
+    log "warning: low disk space for Cloudflare WARP install: $path has ${free}MB free, below recommended ${threshold}MB for $purpose; continuing because it is above the hard minimum"
+  fi
+}
+
 check_free_inodes() {
   local path="$1"
   local required="$2"
@@ -149,6 +165,7 @@ estimate_apt_space() {
   local output need_line add_line need_value need_unit add_value add_unit
   APT_DOWNLOAD_MB=0
   APT_INSTALL_MB=0
+  APT_SPACE_ESTIMATED="false"
   output="$(LC_ALL=C apt-get -s install -y cloudflare-warp 2>/dev/null || true)"
 
   need_line="$(printf '%s\n' "$output" | sed -n 's/^Need to get \([^ ]*\) \([^ ]*\) of archives\..*/\1 \2/p' | tail -n 1)"
@@ -159,17 +176,20 @@ estimate_apt_space() {
 $need_line
 EOF
     APT_DOWNLOAD_MB="$(size_to_mb "$need_value" "$need_unit")"
+    APT_SPACE_ESTIMATED="true"
   fi
   if [ -n "$add_line" ]; then
     read -r add_value add_unit <<EOF
 $add_line
 EOF
     APT_INSTALL_MB="$(size_to_mb "$add_value" "$add_unit")"
+    APT_SPACE_ESTIMATED="true"
   fi
 }
 
 preflight_basic_disk_space() {
   validate_non_negative_int WARPPOOL_WARP_MIN_FREE_MB "$MIN_WARP_FREE_MB"
+  validate_non_negative_int WARPPOOL_WARP_WARN_FREE_MB "$WARN_WARP_FREE_MB"
   validate_non_negative_int WARPPOOL_WARP_MIN_APT_CACHE_MB "$MIN_APT_CACHE_FREE_MB"
   validate_non_negative_int WARPPOOL_WARP_MIN_TMP_MB "$MIN_TMP_FREE_MB"
   validate_non_negative_int WARPPOOL_WARP_MIN_FREE_INODES "$MIN_FREE_INODES"
@@ -183,19 +203,25 @@ preflight_basic_disk_space() {
 preflight_warp_install_space() {
   local install_required var_required
   estimate_apt_space
-  install_required=$((APT_INSTALL_MB + 200))
-  var_required=$((APT_DOWNLOAD_MB + 200))
-  if [ "$install_required" -lt "$MIN_WARP_FREE_MB" ]; then
+  if [ "$APT_SPACE_ESTIMATED" = "true" ]; then
+    install_required=$((APT_INSTALL_MB + 200))
+    var_required=$((APT_DOWNLOAD_MB + 100))
+    if [ "$install_required" -lt "$MIN_WARP_FREE_MB" ]; then
+      install_required="$MIN_WARP_FREE_MB"
+    fi
+    if [ "$var_required" -lt "$MIN_APT_CACHE_FREE_MB" ]; then
+      var_required="$MIN_APT_CACHE_FREE_MB"
+    fi
+  else
     install_required="$MIN_WARP_FREE_MB"
-  fi
-  if [ "$var_required" -lt "$MIN_APT_CACHE_FREE_MB" ]; then
     var_required="$MIN_APT_CACHE_FREE_MB"
   fi
 
-  log "disk preflight: apt download=${APT_DOWNLOAD_MB}MB, install=${APT_INSTALL_MB}MB, requiring /usr ${install_required}MB, /var ${var_required}MB, /tmp ${MIN_TMP_FREE_MB}MB"
+  log "disk preflight: apt estimated=${APT_SPACE_ESTIMATED}, download=${APT_DOWNLOAD_MB}MB, install=${APT_INSTALL_MB}MB, requiring /usr ${install_required}MB, /var ${var_required}MB, /tmp ${MIN_TMP_FREE_MB}MB"
   check_free_mb /usr "$install_required" "package unpack/install"
   check_free_mb /var "$var_required" "apt package cache"
   check_free_mb /tmp "$MIN_TMP_FREE_MB" "temporary files"
+  warn_free_mb /usr "$WARN_WARP_FREE_MB" "official WARP package unpack/install"
   check_free_inodes /usr "$MIN_FREE_INODES"
   check_free_inodes /var "$MIN_FREE_INODES"
   check_free_inodes /tmp "$MIN_FREE_INODES"
