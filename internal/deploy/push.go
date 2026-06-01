@@ -76,6 +76,7 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	if opts.Node.PublicIP == "" {
 		opts.Node.PublicIP = opts.SSH.Host
 	}
+	opts.Node = ApplySSHMetadata(opts.Node, opts.SSH)
 
 	if err := config.ValidateNode(cfg, opts.Node); err != nil {
 		return cfg, PushResult{}, err
@@ -195,6 +196,28 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 
 	next, err := config.AddNode(cfg, opts.Node)
 	return next, result, err
+}
+
+func ApplySSHMetadata(node config.Node, ssh SSHOptions) config.Node {
+	if strings.TrimSpace(ssh.Host) != "" {
+		node.SSHHost = strings.TrimSpace(ssh.Host)
+	}
+	if ssh.Port != 0 {
+		node.SSHPort = ssh.Port
+	}
+	if strings.TrimSpace(ssh.User) != "" {
+		node.SSHUser = strings.TrimSpace(ssh.User)
+	}
+	if strings.TrimSpace(ssh.KeyPath) != "" {
+		node.SSHKeyPath = strings.TrimSpace(ssh.KeyPath)
+	}
+	if strings.TrimSpace(ssh.KnownHostsPath) != "" {
+		node.SSHKnownHostsPath = strings.TrimSpace(ssh.KnownHostsPath)
+	}
+	if ssh.InsecureIgnoreHostKey {
+		node.SSHInsecureHostKey = true
+	}
+	return node
 }
 
 type RemoteRunner struct {

@@ -73,6 +73,12 @@ type Node struct {
 	WGLocalDevice      string `json:"wg_local_device,omitempty"`
 	WGLocalConfigPath  string `json:"wg_local_config_path,omitempty"`
 	Endpoint           string `json:"endpoint,omitempty"`
+	SSHHost            string `json:"ssh_host,omitempty"`
+	SSHPort            int    `json:"ssh_port,omitempty"`
+	SSHUser            string `json:"ssh_user,omitempty"`
+	SSHKeyPath         string `json:"ssh_key_path,omitempty"`
+	SSHKnownHostsPath  string `json:"ssh_known_hosts_path,omitempty"`
+	SSHInsecureHostKey bool   `json:"ssh_insecure_skip_host_key_check,omitempty"`
 	CreatedAt          string `json:"created_at,omitempty"`
 	LastUpdated        string `json:"last_updated,omitempty"`
 }

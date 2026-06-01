@@ -70,3 +70,30 @@ func TestSafeFilePart(t *testing.T) {
 		t.Fatalf("unexpected fallback safe file part: %s", got)
 	}
 }
+
+func TestNodeSSHHostDefault(t *testing.T) {
+	node := config.Node{
+		SSHHost:  "ssh.example.com",
+		PublicIP: "203.0.113.10",
+		Endpoint: "198.51.100.10:51820",
+	}
+	if got := nodeSSHHostDefault(node); got != "ssh.example.com" {
+		t.Fatalf("unexpected ssh host default: %s", got)
+	}
+
+	node.SSHHost = ""
+	if got := nodeSSHHostDefault(node); got != "203.0.113.10" {
+		t.Fatalf("unexpected public ip fallback: %s", got)
+	}
+
+	node.PublicIP = ""
+	if got := nodeSSHHostDefault(node); got != "198.51.100.10" {
+		t.Fatalf("unexpected endpoint fallback: %s", got)
+	}
+}
+
+func TestEndpointHostIPv6(t *testing.T) {
+	if got := endpointHost("[2001:db8::1]:51820"); got != "2001:db8::1" {
+		t.Fatalf("unexpected ipv6 endpoint host: %s", got)
+	}
+}
