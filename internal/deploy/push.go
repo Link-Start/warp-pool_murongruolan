@@ -476,12 +476,22 @@ func configureRemoteWireGuard(runner RemoteRunner, plan wireguard.Plan, remoteDi
 			result.Logs = append(result.Logs, remoteResult.Stderr)
 		}
 		if err != nil {
-			return err
+			return fmt.Errorf("%s: %w", explainWireGuardStartupFailure(remoteResult.Stdout+"\n"+remoteResult.Stderr), err)
 		}
 	}
 
 	result.Logs = append(result.Logs, "WireGuard started: "+plan.Device)
 	return nil
+}
+
+func explainWireGuardStartupFailure(output string) string {
+	lower := strings.ToLower(output)
+	switch {
+	case strings.Contains(lower, "unknown device type"), strings.Contains(lower, "protocol not supported"):
+		return "remote kernel does not support WireGuard; reboot into a kernel with WireGuard support or reinstall a supported kernel/OS image, then redeploy"
+	default:
+		return "remote WireGuard startup failed"
+	}
 }
 
 func installRemoteNodeUninstaller(runner RemoteRunner, remoteDir string, result *PushResult) error {

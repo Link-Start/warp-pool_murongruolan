@@ -120,6 +120,13 @@ func TestRunWireGuardPreflightCommandUsesRemoteDir(t *testing.T) {
 	}
 }
 
+func TestExplainWireGuardStartupFailureForUnsupportedKernel(t *testing.T) {
+	msg := explainWireGuardStartupFailure("Error: Unknown device type.\nUnable to access interface: Protocol not supported")
+	if !strings.Contains(msg, "remote kernel does not support WireGuard") {
+		t.Fatalf("unexpected explanation: %s", msg)
+	}
+}
+
 func TestWarpForwardCommandIncludesServerAddress(t *testing.T) {
 	command := warpForwardCommand(wireguardPlan(), "/tmp/custom dir", 14000)
 	for _, want := range []string{

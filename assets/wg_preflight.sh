@@ -255,6 +255,55 @@ check_port_conflicts() {
   fail "UDP port conflict: $LISTEN_PORT is already in use: $line"
 }
 
+try_wireguard_kernel_probe() {
+  local probe="$1"
+  local output status
+  set +e
+  output="$(ip link add "$probe" type wireguard 2>&1)"
+  status=$?
+  set -e
+  if [ "$status" -eq 0 ]; then
+    ip link delete "$probe" >/dev/null 2>&1 || true
+    return 0
+  fi
+  printf '%s\n' "$output"
+  return "$status"
+}
+
+kernel_reboot_hint() {
+  local running latest
+  running="$(uname -r 2>/dev/null || true)"
+  latest="$(ls /boot/vmlinuz-* 2>/dev/null | sed 's#.*/vmlinuz-##' | sort -V | tail -n 1 || true)"
+  if [ -n "$running" ] && [ -n "$latest" ] && [ "$running" != "$latest" ]; then
+    printf ' A newer kernel appears to be installed (%s), but the current running kernel is %s. Reboot the node and retry deployment.' "$latest" "$running"
+  else
+    printf ' Install or enable the WireGuard kernel module, or use a kernel/OS image with WireGuard support, then retry deployment.'
+  fi
+}
+
+check_wireguard_kernel_support() {
+  local probe output hint
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: check kernel WireGuard support"
+    return 0
+  fi
+
+  probe="wpcheck$$"
+  if output="$(try_wireguard_kernel_probe "$probe")"; then
+    return 0
+  fi
+
+  if command -v modprobe >/dev/null 2>&1; then
+    modprobe wireguard >/dev/null 2>&1 || true
+    if output="$(try_wireguard_kernel_probe "$probe")"; then
+      return 0
+    fi
+  fi
+
+  hint="$(kernel_reboot_hint)"
+  fail "current kernel does not support WireGuard interfaces: ip link add type wireguard failed: ${output:-unknown error}.${hint}"
+}
+
 fix_firewall_when_safe() {
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
     if ! ufw status 2>/dev/null | grep -Eq "(^| )$LISTEN_PORT/udp( |$)"; then
@@ -301,6 +350,7 @@ main() {
   command -v wg-quick >/dev/null 2>&1 || fail "wg-quick command not found"
 
   log "checking device=$DEVICE server_addr=$SERVER_ADDR listen_port=$LISTEN_PORT"
+  check_wireguard_kernel_support
   check_same_device
   check_address_conflicts
   check_route_conflicts
