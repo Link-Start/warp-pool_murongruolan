@@ -6,22 +6,44 @@ VERSION_ARG="${WARPPOOL_VERSION:-${WARPOOL_VERSION:-latest}}"
 INSTALL_DIR="${WARPPOOL_INSTALL_DIR:-${WARPOOL_INSTALL_DIR:-/usr/local/bin}}"
 LIB_DIR="${WARPPOOL_LIB_DIR:-${WARPOOL_LIB_DIR:-/usr/local/lib/warppool}}"
 CONFIG_PATH="${WARPPOOL_CONFIG_PATH:-${WARPOOL_CONFIG_PATH:-/etc/warppool/config.json}}"
+LANGUAGE="${WARPPOOL_LANGUAGE:-${WARPOOL_LANGUAGE:-en}}"
+LOCAL_FILE=""
 DRY_RUN="false"
 YES="false"
 WORK_DIR=""
 expected=""
 actual=""
+ARCH=""
+NEW_BINARY=""
+NEW_ASSETS=""
+ARCHIVE=""
+CHECKSUMS=""
+ASSET_NAME=""
+CURRENT_STEP=""
+CURRENT_ARG=""
+PROGRESS_RUNNING="false"
+PROGRESS_STATE=""
+PROGRESS_PID=""
+PROGRESS_STARTED_AT=""
 
 log() {
+  if [ "${PROGRESS_RUNNING:-false}" = "true" ] && [ -t 1 ]; then
+    clear_progress_output
+    printf '[WarpPool][upgrade] %s\n' "$*"
+    render_progress
+    return 0
+  fi
   printf '[WarpPool][upgrade] %s\n' "$*"
 }
 
 fail() {
+  stop_progress
   printf '[WarpPool][upgrade][ERROR] %s\n' "$*" >&2
   exit 1
 }
 
 cleanup() {
+  stop_progress
   if [ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ]; then
     rm -rf -- "$WORK_DIR"
   fi
@@ -35,13 +57,194 @@ WarpPool upgrade helper
 
 Usage:
   warppool upgrade [--version latest|v0.1.1] [--yes] [--dry-run]
+  warppool upgrade --file /path/to/warppool-linux-amd64.tar.gz [--yes] [--dry-run]
 
 Environment:
   WARPPOOL_REPO=owner/name
   WARPPOOL_INSTALL_DIR=/usr/local/bin
   WARPPOOL_LIB_DIR=/usr/local/lib/warppool
   WARPPOOL_CONFIG_PATH=/etc/warppool/config.json
+  WARPPOOL_LANGUAGE=en|zh
 USAGE
+}
+
+normalize_language() {
+  case "$LANGUAGE" in
+    zh|zh_CN|zh-CN|cn|CN) LANGUAGE="zh" ;;
+    *) LANGUAGE="en" ;;
+  esac
+}
+
+t() {
+  local en="$1"
+  local zh="$2"
+  if [ "$LANGUAGE" = "zh" ]; then
+    printf '%s\n' "$zh"
+  else
+    printf '%s\n' "$en"
+  fi
+}
+
+progress_text() {
+  local key="$1"
+  local arg="${2:-}"
+  case "$key" in
+    confirm)
+      t "Waiting for confirmation..." "等待用户确认..."
+      ;;
+    backup)
+      t "Backing up current installation..." "正在备份当前安装..."
+      ;;
+    package)
+      if [ -n "$arg" ]; then
+        t "Using local package: $arg" "使用本地安装包：$arg"
+      else
+        t "Downloading release package..." "正在下载发布包..."
+      fi
+      ;;
+    verify)
+      t "Verifying package architecture and version..." "正在校验安装包架构和版本..."
+      ;;
+    install)
+      t "Installing binary and bundled assets..." "正在安装二进制和资源文件..."
+      ;;
+    singbox)
+      t "Refreshing sing-box..." "正在刷新 sing-box..."
+      ;;
+    systemd)
+      t "Refreshing systemd service files..." "正在刷新 systemd 服务文件..."
+      ;;
+    restart)
+      t "Restarting WarpPool services..." "正在重启 WarpPool 服务..."
+      ;;
+    done)
+      t "Upgrade completed." "升级完成。"
+      ;;
+    *)
+      printf '%s\n' "$key"
+      ;;
+  esac
+}
+
+progress_stage() {
+  case "$1" in
+    confirm) printf '1' ;;
+    backup) printf '2' ;;
+    package) printf '3' ;;
+    verify) printf '4' ;;
+    install) printf '5' ;;
+    singbox) printf '6' ;;
+    systemd) printf '7' ;;
+    restart) printf '8' ;;
+    done) printf '8' ;;
+    *) printf '1' ;;
+  esac
+}
+
+progress_bar() {
+  local stage="$1"
+  local total=8
+  local width=12
+  local filled=$((stage * width / total))
+  [ "$filled" -lt 1 ] && filled=1
+  [ "$filled" -gt "$width" ] && filled="$width"
+  local empty=$((width - filled))
+  printf '['
+  printf '%*s' "$filled" '' | tr ' ' '='
+  printf '%*s' "$empty" '' | tr ' ' '-'
+  printf ']'
+}
+
+render_progress() {
+  [ "$PROGRESS_RUNNING" = "true" ] || return 0
+  [ -t 1 ] || return 0
+  local key="$CURRENT_STEP"
+  [ -n "$key" ] || return 0
+  local stage total elapsed msg bar
+  stage="$(progress_stage "$key")"
+  total=8
+  elapsed="$(($(date +%s) - PROGRESS_STARTED_AT))"
+  msg="$(progress_text "$key" "$CURRENT_ARG")"
+  bar="$(progress_bar "$stage")"
+  clear_progress_output
+  local label
+  if [ "$LANGUAGE" = "zh" ]; then
+    if [ -n "$LOCAL_FILE" ]; then
+      label="本地包升级"
+    else
+      label="在线升级"
+    fi
+    printf '[WarpPool] %s %s/%s %s | 已用 %ss\n当前步骤：%s' "$bar" "$stage" "$total" "$label" "$elapsed" "$msg"
+  else
+    if [ -n "$LOCAL_FILE" ]; then
+      label="local package upgrade"
+    else
+      label="release upgrade"
+    fi
+    printf '[WarpPool] %s %s/%s %s | %ss elapsed\nCurrent step: %s' "$bar" "$stage" "$total" "$label" "$elapsed" "$msg"
+  fi
+}
+
+progress_loop() {
+  while true; do
+    if [ -n "${PROGRESS_STATE:-}" ] && [ -r "$PROGRESS_STATE" ]; then
+      {
+        IFS= read -r CURRENT_STEP || CURRENT_STEP=""
+        IFS= read -r CURRENT_ARG || CURRENT_ARG=""
+      } <"$PROGRESS_STATE"
+    fi
+    render_progress
+    sleep 1
+  done
+}
+
+start_progress() {
+  [ -t 1 ] || return 0
+  PROGRESS_RUNNING="true"
+  PROGRESS_STATE="$(mktemp)"
+  PROGRESS_STARTED_AT="$(date +%s)"
+  printf '\n\n'
+  progress_loop &
+  PROGRESS_PID="$!"
+}
+
+stop_progress() {
+  if [ "${PROGRESS_RUNNING:-false}" = "true" ]; then
+    PROGRESS_RUNNING="false"
+    if [ -n "${PROGRESS_PID:-}" ]; then
+      kill "$PROGRESS_PID" >/dev/null 2>&1 || true
+      wait "$PROGRESS_PID" 2>/dev/null || true
+    fi
+    if [ -t 1 ]; then
+      clear_progress_output
+    fi
+    if [ -n "${PROGRESS_STATE:-}" ]; then
+      rm -f -- "$PROGRESS_STATE"
+      PROGRESS_STATE=""
+    fi
+  fi
+}
+
+set_step() {
+  CURRENT_STEP="$1"
+  CURRENT_ARG="${2:-}"
+  if [ -t 1 ]; then
+    if [ -n "${PROGRESS_STATE:-}" ]; then
+      {
+        printf '%s\n' "$CURRENT_STEP"
+        printf '%s\n' "$CURRENT_ARG"
+      } >"$PROGRESS_STATE"
+    fi
+    render_progress
+  else
+    log "$(progress_text "$CURRENT_STEP" "$CURRENT_ARG")"
+  fi
+}
+
+clear_progress_output() {
+  [ -t 1 ] || return 0
+  printf '\r\033[2K'
+  printf '\033[1A\r\033[2K' 2>/dev/null || true
 }
 
 parse_args() {
@@ -66,6 +269,22 @@ parse_args() {
         ;;
       --repo=*)
         REPO="${1#--repo=}"
+        ;;
+      --file|--local)
+        shift
+        [ "$#" -gt 0 ] || fail "--file requires a value"
+        LOCAL_FILE="$1"
+        ;;
+      --file=*|--local=*)
+        LOCAL_FILE="${1#*=}"
+        ;;
+      --lang|--language)
+        shift
+        [ "$#" -gt 0 ] || fail "--language requires a value"
+        LANGUAGE="$1"
+        ;;
+      --lang=*|--language=*)
+        LANGUAGE="${1#*=}"
         ;;
       --yes|-y)
         YES="true"
@@ -152,13 +371,19 @@ fallback_download_url() {
 }
 
 confirm() {
+  set_step confirm
   if [ "$YES" = "true" ]; then
     return 0
   fi
   if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
     fail "non-interactive upgrade requires --yes"
   fi
-  printf 'Upgrade WarpPool from %s? [y/N]: ' "$(release_url)" >/dev/tty
+  if [ -n "$LOCAL_FILE" ]; then
+    printf '%s\n' "$(t "WARNING: local packages are trusted as root-installed code. Only use packages you built or trust." "警告：本地安装包会以 root 权限安装，请只使用自己构建或信任的安装包。")" >/dev/tty
+    printf '%s' "$(t "Upgrade WarpPool from local package $LOCAL_FILE? [y/N]: " "从本地安装包 $LOCAL_FILE 升级 WarpPool？[y/N]：")" >/dev/tty
+  else
+    printf 'Upgrade WarpPool from %s? [y/N]: ' "$(release_url)" >/dev/tty
+  fi
   read -r answer </dev/tty
   case "$answer" in
     y|Y|yes|YES) ;;
@@ -167,6 +392,7 @@ confirm() {
 }
 
 backup_existing() {
+  set_step backup
   BACKUP_DIR="/var/backups/warppool/$(date -u +%Y%m%dT%H%M%SZ)"
   if [ "$DRY_RUN" = "true" ]; then
     log "dry-run: backup existing installation to $BACKUP_DIR"
@@ -192,34 +418,72 @@ download_and_verify() {
   CHECKSUMS="$WORK_DIR/checksums.txt"
   ASSET_NAME="warppool-linux-${ARCH}.tar.gz"
 
-  log "downloading $(release_url)"
-  if ! fetch "$(release_url)" "$ARCHIVE"; then
-    log "latest download failed; trying fallback version URL"
-    fetch "$(fallback_download_url)" "$ARCHIVE"
-  fi
-  if fetch "$(checksum_url)" "$CHECKSUMS"; then
-    if command -v sha256sum >/dev/null 2>&1; then
-      expected=""
-      actual=""
-      expected="$(awk -v asset="$ASSET_NAME" '$2 ~ asset "$" {print $1; exit}' "$CHECKSUMS")"
-      [ -n "$expected" ] || fail "checksum for $ASSET_NAME not found"
-      actual="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
-      [ "$actual" = "$expected" ] || fail "checksum mismatch for $ASSET_NAME"
-    else
-      log "warning: sha256sum not found, checksum verification skipped"
-    fi
+  set_step package "$LOCAL_FILE"
+  if [ -n "$LOCAL_FILE" ]; then
+    [ -f "$LOCAL_FILE" ] || fail "$(t "local package not found: $LOCAL_FILE" "本地安装包不存在：$LOCAL_FILE")"
+    [ -s "$LOCAL_FILE" ] || fail "$(t "local package is empty: $LOCAL_FILE" "本地安装包为空：$LOCAL_FILE")"
+    cp "$LOCAL_FILE" "$ARCHIVE"
+    log "using local package: $LOCAL_FILE"
+    log "$(t "WARNING: local packages are trusted as root-installed code. Only use packages you built or trust." "警告：本地安装包会以 root 权限安装，请只使用自己构建或信任的安装包。")"
   else
-    log "warning: checksums.txt not available, checksum verification skipped"
+    log "downloading $(release_url)"
+    if ! fetch "$(release_url)" "$ARCHIVE"; then
+      log "latest download failed; trying fallback version URL"
+      fetch "$(fallback_download_url)" "$ARCHIVE"
+    fi
+    if fetch "$(checksum_url)" "$CHECKSUMS"; then
+      if command -v sha256sum >/dev/null 2>&1; then
+        expected=""
+        actual=""
+        expected="$(awk -v asset="$ASSET_NAME" '$2 ~ asset "$" {print $1; exit}' "$CHECKSUMS")"
+        [ -n "$expected" ] || fail "checksum for $ASSET_NAME not found"
+        actual="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
+        [ "$actual" = "$expected" ] || fail "checksum mismatch for $ASSET_NAME"
+      else
+        log "warning: sha256sum not found, checksum verification skipped"
+      fi
+    else
+      log "warning: checksums.txt not available, checksum verification skipped"
+    fi
   fi
 
   tar -xzf "$ARCHIVE" -C "$WORK_DIR"
   NEW_BINARY="$(find "$WORK_DIR" -type f -name warppool | head -n 1 || true)"
   NEW_ASSETS="$(find "$WORK_DIR" -type d -name assets | head -n 1 || true)"
-  [ -n "$NEW_BINARY" ] || fail "warppool binary not found in release package"
-  [ -n "$NEW_ASSETS" ] || fail "assets directory not found in release package"
+  [ -n "$NEW_BINARY" ] || fail "$(t "warppool binary not found in release package" "发布包中未找到 warppool 二进制文件")"
+  [ -n "$NEW_ASSETS" ] || fail "$(t "assets directory not found in release package" "发布包中未找到 assets 目录")"
+  verify_package
+}
+
+current_version() {
+  if [ -x "$INSTALL_DIR/warppool" ]; then
+    "$INSTALL_DIR/warppool" version 2>/dev/null | awk '/^version:/ {print $2; exit}' || true
+  fi
+}
+
+binary_version() {
+  "$1" version 2>/dev/null | awk '/^version:/ {print $2; exit}' || true
+}
+
+verify_package() {
+  set_step verify
+  [ -x "$NEW_BINARY" ] || chmod 0755 "$NEW_BINARY" || fail "$(t "cannot make package binary executable" "无法给安装包中的二进制文件添加可执行权限")"
+  local new_version current
+  if ! "$NEW_BINARY" version >/dev/null 2>&1; then
+    fail "$(t "package binary cannot run on this system; it may be the wrong CPU architecture. Expected linux-$ARCH." "安装包中的二进制无法在当前系统运行，可能是 CPU 架构不匹配。当前系统需要 linux-$ARCH。")"
+  fi
+  new_version="$(binary_version "$NEW_BINARY")"
+  [ -n "$new_version" ] || fail "$(t "cannot detect package version" "无法检测安装包版本")"
+  current="$(current_version)"
+  if [ -n "$current" ] && [ "$new_version" = "$current" ]; then
+    log "warning: package version equals installed version: $new_version"
+  fi
+  log "package version: $new_version"
+  [ -z "$current" ] || log "installed version: $current"
 }
 
 install_new_version() {
+  set_step install
   if [ "$DRY_RUN" = "true" ]; then
     log "dry-run: install binary to $INSTALL_DIR/warppool"
     log "dry-run: install assets to $LIB_DIR/assets"
@@ -260,6 +524,7 @@ write_version_marker() {
 }
 
 restart_services() {
+  set_step restart
   if ! command -v systemctl >/dev/null 2>&1; then
     log "systemctl not found, skipping service restart"
     return 0
@@ -279,6 +544,7 @@ restart_services() {
 }
 
 refresh_systemd_units() {
+  set_step systemd
   local bin="$INSTALL_DIR/warppool"
   local SINGBOX_BIN=""
   if [ "$DRY_RUN" = "true" ]; then
@@ -304,6 +570,7 @@ refresh_systemd_units() {
 }
 
 refresh_singbox() {
+  set_step singbox
   local script="$LIB_DIR/assets/singbox_install.sh"
   if [ "$DRY_RUN" = "true" ]; then
     log "dry-run: refresh sing-box through $script"
@@ -318,9 +585,11 @@ refresh_singbox() {
 
 main() {
   parse_args "$@"
+  normalize_language
   require_root
   command -v tar >/dev/null 2>&1 || fail "tar is required"
   detect_arch
+  start_progress
   confirm
   backup_existing
   download_and_verify
@@ -329,6 +598,8 @@ main() {
   refresh_singbox
   refresh_systemd_units
   restart_services
+  set_step done
+  stop_progress
   log "upgrade completed"
 }
 

@@ -195,6 +195,7 @@ func redactWireGuardConfig(value string) string {
 func newUpgradeCommand() *cobra.Command {
 	var scriptPath string
 	var versionArg string
+	var localFile string
 	var yes bool
 	var dryRun bool
 	cmd := &cobra.Command{
@@ -214,6 +215,16 @@ func newUpgradeCommand() *cobra.Command {
 			if versionArg != "" {
 				argv = append(argv, "--version", versionArg)
 			}
+			if localFile != "" {
+				argv = append(argv, "--file", localFile)
+			}
+			language := "en"
+			if envLanguage := os.Getenv("WARPPOOL_LANGUAGE"); envLanguage != "" {
+				language = cfgLanguage(config.Config{Language: envLanguage})
+			} else if cfg, err := config.Load(resolvedConfigPath()); err == nil {
+				language = cfgLanguage(cfg)
+			}
+			argv = append(argv, "--language", language)
 			if yes {
 				argv = append(argv, "--yes")
 			}
@@ -229,6 +240,7 @@ func newUpgradeCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&scriptPath, "script", "", "upgrade helper script path")
 	cmd.Flags().StringVar(&versionArg, "version", "", "release version: latest or vX.Y.Z")
+	cmd.Flags().StringVar(&localFile, "file", "", "local release package path, for example /tmp/warppool-linux-amd64.tar.gz")
 	cmd.Flags().BoolVar(&yes, "yes", false, "run without confirmation")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print upgrade actions without changing files")
 	return cmd
