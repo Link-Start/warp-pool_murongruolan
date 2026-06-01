@@ -7,6 +7,7 @@ CLIENT_ADDR=""
 LISTEN_PORT=""
 AUTO_FIX="true"
 DRY_RUN="false"
+KERNEL_ONLY="false"
 
 log() {
   printf '[WarpPool][wg-preflight] %s\n' "$*"
@@ -60,6 +61,9 @@ parse_args() {
       auto_fix=*)
         AUTO_FIX="${arg#auto_fix=}"
         ;;
+      kernel_only=*|kernel-only=*)
+        KERNEL_ONLY="${arg#*=}"
+        ;;
       *)
         fail "unknown argument: $arg"
         ;;
@@ -68,6 +72,9 @@ parse_args() {
 }
 
 require_args() {
+  if [ "$KERNEL_ONLY" = "true" ]; then
+    return 0
+  fi
   [ -n "$DEVICE" ] || fail "device is required"
   [ -n "$SERVER_ADDR" ] || fail "server_addr is required"
   [ -n "$CLIENT_ADDR" ] || fail "client_addr is required"
@@ -348,6 +355,13 @@ main() {
   command -v ip >/dev/null 2>&1 || fail "ip command not found"
   command -v wg >/dev/null 2>&1 || fail "wg command not found"
   command -v wg-quick >/dev/null 2>&1 || fail "wg-quick command not found"
+
+  if [ "$KERNEL_ONLY" = "true" ]; then
+    log "checking kernel WireGuard support"
+    check_wireguard_kernel_support
+    log "kernel WireGuard support passed"
+    return 0
+  fi
 
   log "checking device=$DEVICE server_addr=$SERVER_ADDR listen_port=$LISTEN_PORT"
   check_wireguard_kernel_support

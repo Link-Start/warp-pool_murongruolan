@@ -90,6 +90,14 @@ log_wireguard_ready() {
   log "WireGuard package installed; config generation will be handled by WarpPool deploy flow"
 }
 
+check_wireguard_kernel_support() {
+  local dir
+  dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+  if [ -r "$dir/wg_preflight.sh" ]; then
+    run bash "$dir/wg_preflight.sh" kernel_only=true
+  fi
+}
+
 install_node_uninstaller() {
   local dir script
   dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
@@ -343,6 +351,7 @@ main() {
   validate_wireguard_ports
   install_packages
   log_wireguard_ready
+  check_wireguard_kernel_support
   install_node_uninstaller
   fetch_registration_info
   maybe_install_warp
