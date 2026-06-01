@@ -42,10 +42,69 @@ type RegisterResponse struct {
 	Node    config.Node `json:"node,omitempty"`
 }
 
+type NodeModeRequest struct {
+	Token string `json:"token"`
+}
+
+type NodeModeResponse struct {
+	OK          bool        `json:"ok"`
+	Message     string      `json:"message,omitempty"`
+	Node        config.Node `json:"node,omitempty"`
+	TargetMode  string      `json:"target_mode,omitempty"`
+	WarpInstall string      `json:"warp_install,omitempty"`
+	RemoveWarp  bool        `json:"remove_warp,omitempty"`
+}
+
 func RegisterHandler(configPath string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, RegisterResponse{OK: true, Message: "ok"})
+	})
+	mux.HandleFunc("/register/info", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writePrepareJSON(w, http.StatusMethodNotAllowed, PrepareResponse{OK: false, Message: "method not allowed"})
+			return
+		}
+
+		var req RegisterRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writePrepareJSON(w, http.StatusBadRequest, PrepareResponse{OK: false, Message: "invalid json body"})
+			return
+		}
+		if req.Token == "" {
+			writePrepareJSON(w, http.StatusBadRequest, PrepareResponse{OK: false, Message: "token is required"})
+			return
+		}
+
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			writePrepareJSON(w, http.StatusInternalServerError, PrepareResponse{OK: false, Message: "load config failed"})
+			fmt.Printf("[WarpPool][register][ERROR] load config: %v\n", err)
+			return
+		}
+		_, token, err := config.FindDeployToken(cfg, req.Token, time.Now().UTC())
+		if err != nil {
+			writePrepareJSON(w, http.StatusBadRequest, PrepareResponse{OK: false, Message: err.Error()})
+			return
+		}
+
+		node := token.Node
+		if node.ExitMode == "" {
+			node.ExitMode = cfg.Defaults.ExitMode
+		}
+		if node.Proxy == "" {
+			node.Proxy = cfg.Defaults.Proxy
+		}
+		if node.BindHost == "" {
+			node.BindHost = cfg.Defaults.BindHost
+		}
+
+		response := PrepareResponse{OK: true, Message: "ok", Node: node}
+		if r.URL.Query().Get("format") == "sh" {
+			writePrepareShell(w, http.StatusOK, response)
+			return
+		}
+		writePrepareJSON(w, http.StatusOK, response)
 	})
 	mux.HandleFunc("/register/prepare", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -80,9 +139,6 @@ func RegisterHandler(configPath string) http.Handler {
 		}
 
 		node := token.Node
-		if req.Mode != "" {
-			node.ExitMode = req.Mode
-		}
 		if node.ExitMode == "" {
 			node.ExitMode = cfg.Defaults.ExitMode
 		}
@@ -184,6 +240,106 @@ func RegisterHandler(configPath string) http.Handler {
 
 		writeJSON(w, http.StatusOK, RegisterResponse{OK: true, Message: "registered", Node: node})
 	})
+	mux.HandleFunc("/node-mode/prepare", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeNodeModeJSON(w, http.StatusMethodNotAllowed, NodeModeResponse{OK: false, Message: "method not allowed"})
+			return
+		}
+
+		var req NodeModeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeNodeModeJSON(w, http.StatusBadRequest, NodeModeResponse{OK: false, Message: "invalid json body"})
+			return
+		}
+		if req.Token == "" {
+			writeNodeModeJSON(w, http.StatusBadRequest, NodeModeResponse{OK: false, Message: "token is required"})
+			return
+		}
+
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			writeNodeModeJSON(w, http.StatusInternalServerError, NodeModeResponse{OK: false, Message: "load config failed"})
+			fmt.Printf("[WarpPool][node-mode][ERROR] load config: %v\n", err)
+			return
+		}
+		_, modeToken, err := config.FindNodeModeToken(cfg, req.Token, time.Now().UTC())
+		if err != nil {
+			writeNodeModeJSON(w, http.StatusBadRequest, NodeModeResponse{OK: false, Message: err.Error()})
+			return
+		}
+
+		response := NodeModeResponse{
+			OK:          true,
+			Message:     "prepared",
+			Node:        modeToken.Node,
+			TargetMode:  modeToken.TargetMode,
+			WarpInstall: modeToken.WarpInstall,
+			RemoveWarp:  modeToken.RemoveWarp,
+		}
+		if response.WarpInstall == "" {
+			response.WarpInstall = config.WarpInstallAuto
+		}
+		if r.URL.Query().Get("format") == "sh" {
+			writeNodeModeShell(w, http.StatusOK, response)
+			return
+		}
+		writeNodeModeJSON(w, http.StatusOK, response)
+	})
+	mux.HandleFunc("/node-mode/complete", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeNodeModeJSON(w, http.StatusMethodNotAllowed, NodeModeResponse{OK: false, Message: "method not allowed"})
+			return
+		}
+
+		var req NodeModeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeNodeModeJSON(w, http.StatusBadRequest, NodeModeResponse{OK: false, Message: "invalid json body"})
+			return
+		}
+		if req.Token == "" {
+			writeNodeModeJSON(w, http.StatusBadRequest, NodeModeResponse{OK: false, Message: "token is required"})
+			return
+		}
+		autostartDisabled := r.URL.Query().Get("autostart") == "0"
+
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			writeNodeModeJSON(w, http.StatusInternalServerError, NodeModeResponse{OK: false, Message: "load config failed"})
+			fmt.Printf("[WarpPool][node-mode][ERROR] load config: %v\n", err)
+			return
+		}
+		var completedToken config.NodeModeToken
+		for _, item := range cfg.ModeTokens {
+			if item.Token == req.Token {
+				completedToken = item
+				break
+			}
+		}
+		cfg, node, err := config.CompleteNodeModeToken(cfg, req.Token, time.Now().UTC())
+		if err != nil {
+			writeNodeModeJSON(w, http.StatusBadRequest, NodeModeResponse{OK: false, Message: err.Error()})
+			return
+		}
+		if err := config.SaveExisting(configPath, cfg); err != nil {
+			writeNodeModeJSON(w, http.StatusInternalServerError, NodeModeResponse{OK: false, Message: "save config failed"})
+			fmt.Printf("[WarpPool][node-mode][ERROR] save config: %v\n", err)
+			return
+		}
+		if completedToken.AutoStart && !autostartDisabled {
+			if err := spawnProxyAutostart(configPath, node.Name); err != nil {
+				fmt.Printf("[WarpPool][node-mode][WARN] auto restart proxy watcher for %s failed: %v\n", node.Name, err)
+			}
+		}
+
+		writeNodeModeJSON(w, http.StatusOK, NodeModeResponse{
+			OK:          true,
+			Message:     "completed",
+			Node:        node,
+			TargetMode:  node.ExitMode,
+			WarpInstall: completedToken.WarpInstall,
+			RemoveWarp:  completedToken.RemoveWarp,
+		})
+	})
 	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, RegisterResponse{OK: false, Message: "method not allowed"})
@@ -236,6 +392,12 @@ func writePrepareJSON(w http.ResponseWriter, status int, value PrepareResponse) 
 	_ = json.NewEncoder(w).Encode(value)
 }
 
+func writeNodeModeJSON(w http.ResponseWriter, status int, value NodeModeResponse) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+
 func writePrepareShell(w http.ResponseWriter, status int, value PrepareResponse) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(status)
@@ -245,11 +407,34 @@ func writePrepareShell(w http.ResponseWriter, status int, value PrepareResponse)
 	}
 	fmt.Fprintf(w, "OK=%s\n", ok)
 	fmt.Fprintf(w, "MESSAGE_B64=%s\n", shellB64(value.Message))
+	fmt.Fprintf(w, "NODE_NAME_B64=%s\n", shellB64(value.Node.Name))
 	fmt.Fprintf(w, "WG_DEVICE_B64=%s\n", shellB64(value.Node.WGDevice))
 	fmt.Fprintf(w, "WG_SERVER_ADDR_B64=%s\n", shellB64(value.Node.WGServerAddress))
 	fmt.Fprintf(w, "WG_CLIENT_ADDR_B64=%s\n", shellB64(value.Node.WGClientAddress))
 	fmt.Fprintf(w, "NODE_EXIT_MODE_B64=%s\n", shellB64(value.Node.ExitMode))
 	fmt.Fprintf(w, "SERVER_CONFIG_B64=%s\n", shellB64(value.ServerConfig))
+}
+
+func writeNodeModeShell(w http.ResponseWriter, status int, value NodeModeResponse) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(status)
+	ok := "0"
+	if value.OK {
+		ok = "1"
+	}
+	removeWarp := "0"
+	if value.RemoveWarp {
+		removeWarp = "1"
+	}
+	fmt.Fprintf(w, "OK=%s\n", ok)
+	fmt.Fprintf(w, "MESSAGE_B64=%s\n", shellB64(value.Message))
+	fmt.Fprintf(w, "NODE_NAME_B64=%s\n", shellB64(value.Node.Name))
+	fmt.Fprintf(w, "TARGET_MODE_B64=%s\n", shellB64(value.TargetMode))
+	fmt.Fprintf(w, "WG_DEVICE_B64=%s\n", shellB64(value.Node.WGDevice))
+	fmt.Fprintf(w, "WG_SERVER_ADDR_B64=%s\n", shellB64(value.Node.WGServerAddress))
+	fmt.Fprintf(w, "WG_CLIENT_ADDR_B64=%s\n", shellB64(value.Node.WGClientAddress))
+	fmt.Fprintf(w, "WARP_INSTALL_B64=%s\n", shellB64(value.WarpInstall))
+	fmt.Fprintf(w, "REMOVE_WARP=%s\n", removeWarp)
 }
 
 func shellB64(value string) string {

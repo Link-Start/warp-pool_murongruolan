@@ -61,7 +61,8 @@ Examples:
   bash install.sh
   bash install.sh mode=warp
   bash install.sh token=xxxxx server=http://1.2.3.4:18080
-  bash install.sh token=xxxxx server=http://1.2.3.4:8080 endpoint=5.6.7.8 wg_listen_port=51820 wg_endpoint_port=30021
+  bash install.sh token=xxxxx server=http://1.2.3.4:8080
+  bash install.sh token=xxxxx server=http://1.2.3.4:8080 endpoint=5.6.7.8 wg_endpoint_port=30021
   bash install.sh base_url=https://example.com/assets
   bash install.sh lang=zh
   bash install.sh --dry-run mode=direct
@@ -269,6 +270,8 @@ choose_registration_server() {
   fi
 
   local input port
+  log_i "recommended Pull flow: run 'warppool deploy-token' on the main server first, then execute the generated command on this node" "推荐的 Pull 流程：先在主服务器执行 'warppool deploy-token'，再把生成的一行命令复制到本节点执行"
+  log_i "the generated command already contains server address and token; this interactive path is only for manual or dependency-only setup" "生成的命令已经包含主服务器地址和 token；当前交互流程只用于手动注册或仅安装节点依赖"
   printf '%s' "$(text "Main server IP/domain for auto registration (Enter to skip): " "主服务器 IP/域名，用于自动注册（回车跳过）: ")" >/dev/tty
   read -r input </dev/tty
   if [ -z "$input" ]; then
@@ -325,6 +328,15 @@ choose_wireguard_ports() {
     fi
     printf '[WarpPool] %s\n' "$(text "invalid port, enter a number between 1 and 65535" "端口无效，请输入 1 到 65535 之间的数字")" >/dev/tty
   done
+
+  if [ -z "$ENDPOINT" ]; then
+    printf '%s' "$(text "Public WireGuard endpoint host/IP for the main server (Enter to auto-detect): " "主服务器连接本节点的 WireGuard 公网端点 host/IP（回车自动检测）: ")" >/dev/tty
+    read -r input </dev/tty
+    ENDPOINT="$input"
+    if [ -z "$ENDPOINT" ]; then
+      log_i "public endpoint host/IP will be auto-detected on this node" "将自动检测本节点公网端点 host/IP"
+    fi
+  fi
 
   if [ -z "$WG_ENDPOINT_PORT" ]; then
     WG_ENDPOINT_PORT="$WG_LISTEN_PORT"
@@ -489,6 +501,7 @@ prepare_child_script() {
   download_script "warp_forward.sh" "$DOWNLOAD_DIR/warp_forward.sh"
   download_script "singbox_install.sh" "$DOWNLOAD_DIR/singbox_install.sh"
   download_script "node_uninstall.sh" "$DOWNLOAD_DIR/node_uninstall.sh"
+  download_script "node_mode.sh" "$DOWNLOAD_DIR/node_mode.sh"
   printf '%s\n' "$child"
 }
 
@@ -499,7 +512,11 @@ dispatch_child_script() {
     fail_i "child installer not found: $child" "未找到子安装脚本：$child"
   fi
 
-  log_i "dispatching to $CHILD_SCRIPT, mode=$MODE" "切换到 $CHILD_SCRIPT，模式=$MODE"
+  if [ -n "$SERVER" ] && [ -n "$TOKEN" ] && [ "$MODE_SET" != "true" ]; then
+    log_i "dispatching to $CHILD_SCRIPT, exit mode will be read from the main server Deploy Token" "切换到 $CHILD_SCRIPT，出口模式将从主服务器 Deploy Token 读取"
+  else
+    log_i "dispatching to $CHILD_SCRIPT, mode=$MODE" "切换到 $CHILD_SCRIPT，模式=$MODE"
+  fi
   if [ "$DRY_RUN" = "true" ]; then
     bash "$child" --dry-run "mode=$MODE" "token=$TOKEN" "server=$SERVER" "endpoint=$ENDPOINT" "wg_listen_port=$WG_LISTEN_PORT" "wg_endpoint_port=$WG_ENDPOINT_PORT"
     return 0
@@ -511,8 +528,10 @@ dispatch_child_script() {
 main() {
   parse_args "$@"
   select_language
-  choose_mode
   choose_registration_server
+  if [ -z "$SERVER" ] || [ -z "$TOKEN" ]; then
+    choose_mode
+  fi
   choose_wireguard_ports
   validate_mode
   validate_registration_args
@@ -526,7 +545,11 @@ main() {
 
   log_i "detected OS: $OS_ID $OS_VERSION" "检测到系统：$OS_ID $OS_VERSION"
   log_i "detected arch: $ARCH" "检测到架构：$ARCH"
-  log_i "selected mode: $MODE" "已选择模式：$MODE"
+  if [ -n "$SERVER" ] && [ -n "$TOKEN" ] && [ "$MODE_SET" != "true" ]; then
+    log_i "selected mode: will be fetched from the main server Deploy Token" "已选择模式：将从主服务器 Deploy Token 获取"
+  else
+    log_i "selected mode: $MODE" "已选择模式：$MODE"
+  fi
 
   dispatch_child_script
   log_i "installer completed" "安装脚本执行完成"

@@ -21,15 +21,23 @@ const (
 )
 
 type Config struct {
-	Version  int           `json:"version"`
-	Language string        `json:"language,omitempty"`
-	Listen   ListenConfig  `json:"listen"`
-	Defaults Defaults      `json:"defaults"`
-	Nodes    []Node        `json:"nodes"`
-	Tokens   []DeployToken `json:"tokens"`
+	Version    int             `json:"version"`
+	Language   string          `json:"language,omitempty"`
+	Listen     ListenConfig    `json:"listen"`
+	Defaults   Defaults        `json:"defaults"`
+	Nodes      []Node          `json:"nodes"`
+	Tokens     []DeployToken   `json:"tokens"`
+	ModeTokens []NodeModeToken `json:"mode_tokens,omitempty"`
 }
 
 const DefaultDeployTokenTTL = 15 * time.Minute
+const DefaultNodeModeTokenTTL = 15 * time.Minute
+
+const (
+	WarpInstallAuto      = "auto"
+	WarpInstallReuse     = "reuse"
+	WarpInstallReinstall = "reinstall"
+)
 
 type ListenConfig struct {
 	Host       string `json:"host"`
@@ -80,6 +88,29 @@ type DeployToken struct {
 	AutoStart    bool   `json:"auto_start,omitempty"`
 }
 
+type NodeModeToken struct {
+	Token       string `json:"token"`
+	NodeName    string `json:"node_name"`
+	TargetMode  string `json:"target_mode"`
+	Node        Node   `json:"node"`
+	ExpiresAt   string `json:"expires_at"`
+	Used        bool   `json:"used"`
+	Completed   bool   `json:"completed"`
+	CompletedAt string `json:"completed_at,omitempty"`
+	WarpInstall string `json:"warp_install,omitempty"`
+	RemoveWarp  bool   `json:"remove_warp,omitempty"`
+	AutoStart   bool   `json:"auto_start,omitempty"`
+}
+
+type NodeModeTokenStatus string
+
+const (
+	NodeModeTokenStatusCompleted NodeModeTokenStatus = "completed"
+	NodeModeTokenStatusUsed      NodeModeTokenStatus = "used"
+	NodeModeTokenStatusExpired   NodeModeTokenStatus = "expired"
+	NodeModeTokenStatusUnused    NodeModeTokenStatus = "unused"
+)
+
 func Default() Config {
 	return Config{
 		Version:  1,
@@ -96,8 +127,9 @@ func Default() Config {
 			ExitMode: ExitModeDirect,
 			CIDR:     "10.200.0.0/16",
 		},
-		Nodes:  []Node{},
-		Tokens: []DeployToken{},
+		Nodes:      []Node{},
+		Tokens:     []DeployToken{},
+		ModeTokens: []NodeModeToken{},
 	}
 }
 
@@ -237,6 +269,15 @@ func ValidateExitMode(mode string) error {
 		return nil
 	default:
 		return fmt.Errorf("unsupported exit mode %q, expected direct or warp", mode)
+	}
+}
+
+func ValidateWarpInstall(value string) error {
+	switch value {
+	case "", WarpInstallAuto, WarpInstallReuse, WarpInstallReinstall:
+		return nil
+	default:
+		return fmt.Errorf("unsupported warp install policy %q, expected auto, reuse, or reinstall", value)
 	}
 }
 
@@ -536,4 +577,123 @@ func CompleteDeployToken(cfg Config, tokenValue string, now time.Time) (Config, 
 	next.Tokens[index].RegisteredAt = now.UTC().Format(time.RFC3339)
 	next.Tokens[index].AutoStart = token.AutoStart
 	return next, token.Node, nil
+}
+
+func AddNodeModeToken(cfg Config, item NodeModeToken) (Config, error) {
+	if item.Token == "" {
+		return cfg, errors.New("node mode token cannot be empty")
+	}
+	if item.NodeName == "" {
+		return cfg, errors.New("node mode token node_name cannot be empty")
+	}
+	if err := ValidateExitMode(item.TargetMode); err != nil {
+		return cfg, err
+	}
+	if err := ValidateWarpInstall(item.WarpInstall); err != nil {
+		return cfg, err
+	}
+	if item.WarpInstall == "" {
+		item.WarpInstall = WarpInstallAuto
+	}
+	if item.ExpiresAt == "" {
+		return cfg, errors.New("node mode token expires_at cannot be empty")
+	}
+
+	node, ok := FindNode(cfg, item.NodeName)
+	if !ok {
+		return cfg, fmt.Errorf("node not found: %s", item.NodeName)
+	}
+	if item.Node.Name == "" {
+		item.Node = node
+	}
+	if item.Node.WGDevice == "" || item.Node.WGServerAddress == "" || item.Node.WGClientAddress == "" {
+		return cfg, fmt.Errorf("node %s has incomplete WireGuard metadata; deploy it first", item.NodeName)
+	}
+
+	nextModeTokens := cfg.ModeTokens[:0]
+	for _, existing := range cfg.ModeTokens {
+		if existing.Token == item.Token {
+			return cfg, errors.New("node mode token already exists")
+		}
+		if !existing.Used && existing.NodeName == item.NodeName {
+			continue
+		}
+		nextModeTokens = append(nextModeTokens, existing)
+	}
+
+	cfg.ModeTokens = nextModeTokens
+	cfg.ModeTokens = append(cfg.ModeTokens, item)
+	return cfg, nil
+}
+
+func FindNodeModeToken(cfg Config, tokenValue string, now time.Time) (int, NodeModeToken, error) {
+	for i, token := range cfg.ModeTokens {
+		if token.Token != tokenValue {
+			continue
+		}
+		if token.Used {
+			return i, token, errors.New("node mode token already used")
+		}
+
+		expiresAt, err := time.Parse(time.RFC3339, token.ExpiresAt)
+		if err != nil {
+			return i, token, fmt.Errorf("invalid node mode token expiry: %w", err)
+		}
+		if now.After(expiresAt) {
+			return i, token, errors.New("node mode token expired")
+		}
+		return i, token, nil
+	}
+	return -1, NodeModeToken{}, errors.New("node mode token not found")
+}
+
+func CompleteNodeModeToken(cfg Config, tokenValue string, now time.Time) (Config, Node, error) {
+	index, modeToken, err := FindNodeModeToken(cfg, tokenValue, now)
+	if err != nil {
+		return cfg, Node{}, err
+	}
+
+	node, ok := FindNode(cfg, modeToken.NodeName)
+	if !ok {
+		return cfg, Node{}, fmt.Errorf("node not found: %s", modeToken.NodeName)
+	}
+	node.ExitMode = modeToken.TargetMode
+
+	next, err := UpdateNode(cfg, node)
+	if err != nil {
+		return cfg, Node{}, err
+	}
+	modeToken.Used = true
+	modeToken.Completed = true
+	modeToken.CompletedAt = now.UTC().Format(time.RFC3339)
+	next.ModeTokens[index] = modeToken
+	return next, node, nil
+}
+
+func NodeModeTokenStatusOf(token NodeModeToken, now time.Time) NodeModeTokenStatus {
+	if token.Used {
+		if token.Completed {
+			return NodeModeTokenStatusCompleted
+		}
+		return NodeModeTokenStatusUsed
+	}
+	expiresAt, err := time.Parse(time.RFC3339, token.ExpiresAt)
+	if err != nil || now.After(expiresAt) {
+		return NodeModeTokenStatusExpired
+	}
+	return NodeModeTokenStatusUnused
+}
+
+func PruneExpiredNodeModeTokens(cfg Config, now time.Time) (Config, int) {
+	next := cfg.ModeTokens[:0]
+	removed := 0
+	for _, token := range cfg.ModeTokens {
+		if !token.Used && NodeModeTokenStatusOf(token, now) == NodeModeTokenStatusExpired {
+			removed++
+			continue
+		}
+		next = append(next, token)
+	}
+	cfg.ModeTokens = next
+	return cfg, removed
 }

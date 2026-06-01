@@ -9,6 +9,8 @@ WG_LISTEN_PORT="51820"
 WG_ENDPOINT_PORT=""
 DRY_RUN="false"
 NODE_EXIT_MODE=""
+SERVER_URL_FOR_STATE=""
+NODE_NAME=""
 
 log() {
   printf '[WarpPool][alpine] %s\n' "$*"
@@ -149,6 +151,27 @@ load_prepare_response() {
   [ -z "$NODE_EXIT_MODE" ] || MODE="$NODE_EXIT_MODE"
 }
 
+fetch_registration_info() {
+  if [ -z "$TOKEN" ] && [ -z "$SERVER" ]; then
+    return 0
+  fi
+
+  if [ -z "$TOKEN" ] || [ -z "$SERVER" ]; then
+    fail "token and server must be provided together"
+  fi
+
+  log "fetching node settings from WarpPool server"
+  local response
+  response="$(curl -fsS \
+    -X POST \
+    -H 'Content-Type: application/json' \
+    -d "{\"token\":\"$TOKEN\"}" \
+    "$SERVER/register/info?format=sh")" || fail "register info failed"
+  load_prepare_response "$response"
+  [ -n "$NODE_EXIT_MODE" ] || fail "register info response missing node exit mode"
+  log "main server selected mode: $MODE"
+}
+
 write_remote_config() {
   local response="$1"
   load_prepare_response "$response"
@@ -166,6 +189,37 @@ write_remote_config() {
     printf '%s\n' "$SERVER_CONFIG" >/etc/wireguard/"$WG_DEVICE".conf
     chmod 0600 /etc/wireguard/"$WG_DEVICE".conf
   fi
+}
+
+extract_node_name() {
+  local response="$1"
+  NODE_NAME_B64=""
+  eval "$response"
+  NODE_NAME="$(printf '%s' "$NODE_NAME_B64" | decode_b64)"
+}
+
+write_node_state() {
+  if [ -z "$SERVER" ] || [ -z "$WG_DEVICE" ]; then
+    return 0
+  fi
+  SERVER_URL_FOR_STATE="$SERVER"
+  run mkdir -p /etc/warppool-node
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: write /etc/warppool-node/state.json"
+    return 0
+  fi
+  cat >/etc/warppool-node/state.json <<EOF
+{
+  "server_url": "$SERVER_URL_FOR_STATE",
+  "node_name": "$NODE_NAME",
+  "wg_device": "$WG_DEVICE",
+  "wg_server_address": "$WG_SERVER_ADDR",
+  "wg_client_address": "$WG_CLIENT_ADDR",
+  "last_mode": "$MODE"
+}
+EOF
+  chmod 0600 /etc/warppool-node/state.json
+  log "saved node state: /etc/warppool-node/state.json"
 }
 
 detect_egress_interface() {
@@ -241,18 +295,10 @@ register_node() {
   response="$(curl -fsS \
     -X POST \
     -H 'Content-Type: application/json' \
-    -d "{\"token\":\"$TOKEN\",\"endpoint\":\"$ENDPOINT\",\"endpoint_port\":$WG_ENDPOINT_PORT,\"server_private_key\":\"$SERVER_PRIVATE_KEY\",\"server_public_key\":\"$SERVER_PUBLIC_KEY\",\"listen_port\":$WG_LISTEN_PORT,\"mode\":\"$MODE\"}" \
+    -d "{\"token\":\"$TOKEN\",\"endpoint\":\"$ENDPOINT\",\"endpoint_port\":$WG_ENDPOINT_PORT,\"server_private_key\":\"$SERVER_PRIVATE_KEY\",\"server_public_key\":\"$SERVER_PUBLIC_KEY\",\"listen_port\":$WG_LISTEN_PORT}" \
     "$SERVER/register/prepare?format=sh")" || fail "register prepare failed"
+  extract_node_name "$response"
   write_remote_config "$response"
-  start_remote_wireguard
-  enable_direct_forwarding
-  log "completing node registration"
-  run curl -fsS \
-    -X POST \
-    -H 'Content-Type: application/json' \
-    -d "{\"token\":\"$TOKEN\"}" \
-    "$SERVER/register/complete" >/dev/null
-  log "node auto registration completed; local proxy service should start automatically on the main server"
 }
 
 main() {
@@ -261,8 +307,21 @@ main() {
   install_packages
   log_wireguard_ready
   install_node_uninstaller
+  fetch_registration_info
   maybe_install_warp
   register_node
+  if [ -n "$TOKEN" ] && [ -n "$SERVER" ]; then
+    start_remote_wireguard
+    enable_direct_forwarding
+    write_node_state
+    log "completing node registration"
+    run curl -fsS \
+      -X POST \
+      -H 'Content-Type: application/json' \
+      -d "{\"token\":\"$TOKEN\"}" \
+      "$SERVER/register/complete" >/dev/null
+    log "node auto registration completed; local proxy service should start automatically on the main server"
+  fi
   if [ -z "$TOKEN" ] && [ -z "$SERVER" ]; then
     log "node dependencies installed only; no main server registration was performed"
     log "to auto-register later, run 'warppool deploy-token' on the main server and execute the generated command on this node"

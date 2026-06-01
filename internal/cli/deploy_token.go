@@ -32,9 +32,9 @@ func newDeployTokenCreateCommandWithHooks(checkPort func(string, int) error, che
 	var ttl time.Duration
 	var publicHost string
 	var repoBaseURL string
-	var endpoint string
-	var wgListenPort int
-	var wgEndpointPort int
+	var deprecatedEndpoint string
+	var deprecatedWGListenPort int
+	var deprecatedWGEndpointPort int
 	var autoStartListener bool
 
 	cmd := &cobra.Command{
@@ -51,29 +51,11 @@ func newDeployTokenCreateCommandWithHooks(checkPort func(string, int) error, che
 			if err := promptDeployTokenOptions(prompt, cfg, &node); err != nil {
 				return err
 			}
-			if wgListenPort == 0 && cmd.Flags().Lookup("wg-listen-port") != nil && !cmd.Flags().Changed("wg-listen-port") {
-				wgListenPort, err = prompt.askInt(tr(language, "WireGuard listen port", "WireGuard 监听端口"), 0, 51820)
-				if err != nil {
-					return err
-				}
-			}
-			if wgListenPort == 0 {
-				wgListenPort = 51820
-			}
-			if wgEndpointPort == 0 && cmd.Flags().Lookup("wg-endpoint-port") != nil && !cmd.Flags().Changed("wg-endpoint-port") {
-				wgEndpointPort, err = prompt.askInt(tr(language, "WireGuard public endpoint port", "WireGuard 公网端点端口"), 0, wgListenPort)
-				if err != nil {
-					return err
-				}
-			}
-			if wgEndpointPort == 0 {
-				wgEndpointPort = wgListenPort
-			}
-			if err := config.ValidatePort(wgListenPort); err != nil {
-				return err
-			}
-			if err := config.ValidatePort(wgEndpointPort); err != nil {
-				return err
+			if cmd.Flags().Changed("wg-endpoint") || cmd.Flags().Changed("wg-listen-port") || cmd.Flags().Changed("wg-endpoint-port") {
+				fmt.Fprintln(cmd.OutOrStdout(), tr(language,
+					"Notice: WireGuard endpoint/listen port flags are now configured on the exit node during installation and are ignored here.",
+					"提示：WireGuard 端点/监听端口现在会在出口节点安装时配置，这里的相关参数会被忽略。",
+				))
 			}
 			if err := ensureRegistrationListener(prompt, path, &cfg, autoStartListener, listenerHooks{
 				CheckPort:      checkPort,
@@ -132,17 +114,20 @@ func newDeployTokenCreateCommandWithHooks(checkPort func(string, int) error, che
 			fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(language, "expires at:", "过期时间："), expiresAt.Format(time.RFC3339))
 			fmt.Fprintln(cmd.OutOrStdout(), divider)
 			fmt.Fprintln(cmd.OutOrStdout(), tr(language, "Install command:", "安装命令："))
-			installArgs := fmt.Sprintf("mode=%s token=%s server=%s", node.ExitMode, tokenValue, serverURL)
-			if endpoint != "" {
-				installArgs += fmt.Sprintf(" endpoint=%s", endpoint)
-			}
-			installArgs += fmt.Sprintf(" wg_listen_port=%d", wgListenPort)
-			installArgs += fmt.Sprintf(" wg_endpoint_port=%d", wgEndpointPort)
+			installArgs := fmt.Sprintf("token=%s server=%s", tokenValue, serverURL)
 			fmt.Fprintf(cmd.OutOrStdout(), "wget -qO- %s/install.sh | sudo bash -s -- %s\n", repoBaseURL, installArgs)
 			fmt.Fprintln(cmd.OutOrStdout(), tr(language, "or:", "或："))
 			fmt.Fprintf(cmd.OutOrStdout(), "curl -fsSL %s/install.sh | sudo bash -s -- %s\n", repoBaseURL, installArgs)
 			fmt.Fprintln(cmd.OutOrStdout(), divider)
-			fmt.Fprintln(cmd.OutOrStdout(), cloudSecurityGroupReminder(language, fmt.Sprintf("%d/tcp", cfg.Listen.Port), fmt.Sprintf("%d/udp", wgEndpointPort)))
+			fmt.Fprintln(cmd.OutOrStdout(), tr(language,
+				"Run the install command on the exit node. The node will only ask for node-side WireGuard/NAT endpoint information.",
+				"请在出口节点执行安装命令。节点侧只会询问本机 WireGuard/NAT 端点信息。",
+			))
+			fmt.Fprintln(cmd.OutOrStdout(), tr(language,
+				"If the exit node is a NAT VPS, enter the provider-mapped public UDP port on the node prompt.",
+				"如果出口节点是 NAT VPS，请在节点侧提示中填写服务商映射出来的公网 UDP 端口。",
+			))
+			fmt.Fprintln(cmd.OutOrStdout(), cloudSecurityGroupReminder(language, fmt.Sprintf("%d/tcp", cfg.Listen.Port)))
 			return nil
 		},
 	}
@@ -157,10 +142,13 @@ func newDeployTokenCreateCommandWithHooks(checkPort func(string, int) error, che
 	cmd.Flags().DurationVar(&ttl, "ttl", config.DefaultDeployTokenTTL, "token TTL")
 	cmd.Flags().StringVar(&publicHost, "public-host", "", "public host/IP for generated install command")
 	cmd.Flags().StringVar(&repoBaseURL, "repo-base-url", "", "installer assets base URL")
-	cmd.Flags().StringVar(&endpoint, "wg-endpoint", "", "WireGuard public endpoint host/IP for the main server to connect, node installer auto-detects when empty")
-	cmd.Flags().IntVar(&wgListenPort, "wg-listen-port", 0, "WireGuard listen port on the node")
-	cmd.Flags().IntVar(&wgEndpointPort, "wg-endpoint-port", 0, "WireGuard public endpoint port, useful for NAT port forwarding")
+	cmd.Flags().StringVar(&deprecatedEndpoint, "wg-endpoint", "", "deprecated: configure WireGuard endpoint on the exit node during installation")
+	cmd.Flags().IntVar(&deprecatedWGListenPort, "wg-listen-port", 0, "deprecated: configure WireGuard listen port on the exit node during installation")
+	cmd.Flags().IntVar(&deprecatedWGEndpointPort, "wg-endpoint-port", 0, "deprecated: configure WireGuard public endpoint port on the exit node during installation")
 	cmd.Flags().BoolVar(&autoStartListener, "auto-start-listener", false, "start registration listener automatically without prompting")
+	_ = deprecatedEndpoint
+	_ = deprecatedWGListenPort
+	_ = deprecatedWGEndpointPort
 
 	return cmd
 }

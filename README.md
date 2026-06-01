@@ -251,39 +251,40 @@ Current limitation: WARP forwarding is TCP-first. UDP and IPv6 are not promised 
 
 ## Pull Deployment
 
-Pull installation scripts are available:
+Recommended flow: run `warppool deploy-token` on the main server first, then copy the generated one-line install command to the exit node. This makes the main server the source of truth for node name, exit mode, local proxy protocol, and local proxy port. The exit node only provides node-side WireGuard/NAT endpoint information.
+
+If you run the node installer directly on the exit node:
 
 ```bash
 wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash
 ```
 
-The script enters an interactive menu:
+The script enters a manual setup menu:
 
-1. Select exit mode. Default: `direct`.
-2. Enter the main server IP/domain. Press Enter to skip auto registration.
-3. If a main server address is entered, enter the registration port. IPv4 defaults to `8080`; domains default to `80`.
-4. Enter a Deploy Token if auto registration is needed.
-5. For auto registration, enter the node-side WireGuard listen port and the public mapped WireGuard port used by the main server.
+1. Enter the main server IP/domain. Press Enter to install node dependencies only.
+2. If a main server address is entered, enter the registration port. IPv4 defaults to `8080`; domains default to `80`.
+3. Enter a Deploy Token if auto registration is needed.
+4. For auto registration, enter the node-side WireGuard listen port and the public UDP port used by the main server.
 
 If the main server IP or Deploy Token is left empty, the script only installs node dependencies. It will not write WireGuard config and will not create a node record on the main server. You can later run `warppool deploy-token` on the main server and execute the generated one-line command on the node.
 
-Non-interactive direct mode:
+For dependency-only installation, pass the exit mode to decide whether WARP should be installed:
 
 ```bash
+# direct mode installs WireGuard and base dependencies only
 wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- mode=direct
-```
 
-Non-interactive WARP mode:
-
-```bash
+# WARP mode also installs the official Cloudflare WARP client
 curl -fsSL https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- mode=warp
 ```
 
-Auto-register with Deploy Token:
+For auto registration, normally use the command printed by `warppool deploy-token`:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- mode=direct token=<token> server=http://<main-server-ip>:8080
+wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- token=<token> server=http://<main-server-ip>:8080
 ```
+
+The node first reads the exit mode stored in the Deploy Token from the main server, then decides whether WARP should be installed.
 
 ---
 
@@ -301,15 +302,14 @@ Generate token command:
 warppool deploy-token
 ```
 
-The command asks for node name, exit mode, proxy protocol, local proxy port, WireGuard listen port, and public mapped WireGuard port. It then prints the Deploy Token plus a one-line node installation command. The exit node uses that command to request WireGuard config, start WireGuard, and complete registration. After registration, the main server starts the local proxy service automatically.
+The command asks for node name, exit mode, proxy protocol, and local proxy port. It then prints the Deploy Token plus a one-line node installation command. The exit node uses that command to request WireGuard config, start WireGuard, and complete registration. After registration, the main server starts the local proxy service automatically.
 
-For NAT VPS nodes where the public UDP mapping differs from the node-side WireGuard listen port, generate the command with:
+To avoid duplicate configuration, Deploy Token uses these sources of truth:
 
-```bash
-warppool deploy-token --wg-listen-port 51820 --wg-endpoint-port 30021
-```
+- Main server: node name, exit mode, proxy protocol, local proxy port.
+- Exit node: node-side WireGuard listen port, auto-detected or manually entered public endpoint, and NAT-mapped public UDP port.
 
-The generated node installer command will include `wg_listen_port` and `wg_endpoint_port`. The node listens on `51820`, while the main server connects to the public endpoint port `30021`.
+For NAT VPS nodes where the public UDP mapping differs from the node-side WireGuard listen port, run the generated install command on the exit node and enter the provider-mapped public UDP port when prompted.
 
 ---
 
@@ -323,11 +323,24 @@ warppool node show nat01 # Show node nat01 details and runtime status
 warppool node start nat01 # Start local proxy service for nat01 and enable autostart
 warppool node stop nat01 # Stop local proxy service
 warppool node status nat01 # Show node nat01 runtime status
+warppool node mode nat01 warp # Switch nat01 to WARP egress; auto-detect and install/reuse WARP
+warppool node mode nat01 direct # Switch nat01 back to direct egress
 warppool remove nat01 # Remove node nat01 record only
 warppool node remove nat01 --clean-wg # Remove node nat01 and delete local WG client config
 ```
 
 `remove` only removes the node record. Add `--clean-wg` when you also want to stop and delete the local WireGuard client config on the main server.
+
+`warppool node mode` defaults to Pull mode and prints a command to run on the exit node. The exit node detects WARP automatically: reuse it when already installed, otherwise install it. Advanced options:
+
+```bash
+warppool node mode nat01 warp --warp-install reuse # Reuse existing WARP only; fail if missing
+warppool node mode nat01 warp --warp-install reinstall # Force reinstall WARP
+warppool node mode nat01 direct --remove-warp # Remove WARP after switching back to direct
+warppool node mode nat01 warp --method ssh # Switch automatically over SSH
+```
+
+Pull mode first reads `/etc/warppool-node/state.json` on the exit node, so normally you do not need to enter the main server address again. For old nodes without this state file, the script prompts for the server address, or you can use the fallback command printed by the main server with `server=http://<main-server-ip>:<port>`.
 
 ### WireGuard
 

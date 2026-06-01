@@ -221,36 +221,40 @@ curl --socks5 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace
 
 ## Pull 部署
 
-可以直接在节点上执行安装脚本：
+推荐先在主服务器执行 `warppool deploy-token`，再把输出的一行安装命令复制到出口节点执行。这样节点名称、出口模式、本地代理协议、本地代理端口都由主服务器确定，出口节点只需要填写本机 WireGuard/NAT 端点信息。
+
+如果直接在出口节点执行安装脚本：
 
 ```bash
 wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash
 ```
 
-脚本会进入交互菜单：
+脚本会进入手动交互菜单：
 
-1. 选择出口模式，默认 `direct`(直接使用节点VPS出口)。
-2. 询问主服务器 IP/域名，不填将跳过自动注册。
-3. 如果填写了主服务器地址，将询问注册端口。
-4. 如需自动注册，需要填写 Deploy Token。
-5. 自动注册时会询问本节点 WireGuard 监听端口和主服务器连接本节点的公网端口。
+1. 询问主服务器 IP/域名，不填将只安装节点依赖。
+2. 如果填写了主服务器地址，将询问注册端口。
+3. 如需自动注册，需要填写 Deploy Token。
+4. 自动注册时会询问本节点 WireGuard 监听端口和主服务器连接本节点的公网 UDP 端口。
 
 如果不填写主服务器 IP/域名 或不填写 Deploy Token，脚本只安装节点依赖，不会写入 WireGuard 配置，也不会在主服务器生成节点记录。后续可以在主服务器执行 `warppool deploy-token`，再把生成的一行命令复制到节点执行。
 
-非交互：
+仅安装节点依赖时可以指定出口模式，用于决定是否安装 WARP：
 
 ```bash
-#  direct 模式
+# direct 模式，只安装 WireGuard 等基础依赖
 wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- mode=direct
 
-# WARP 模式
+# WARP 模式，会额外安装 Cloudflare WARP
 curl -fsSL https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- mode=warp
 ```
-携带 Deploy Token 自动注册：
+
+携带 Deploy Token 自动注册时，通常直接使用 `warppool deploy-token` 输出的命令：
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- mode=direct token=<token> server=http://<主服务器IP>:8080
+wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- token=<token> server=http://<主服务器IP>:8080
 ```
+
+这时节点会先从主服务器读取 Deploy Token 中保存的出口模式，再决定是否安装 WARP。
 
 ---
 
@@ -268,15 +272,14 @@ warppool listen start
 warppool deploy-token
 ```
 
-命令会询问节点名称、出口模式、代理协议、本地代理端口、WireGuard 监听端口和公网映射端口，然后输出 Deploy Token 和一行节点安装命令。出口节点执行该命令后，会向主服务器请求 WireGuard 配置、启动 WireGuard，并完成注册。注册完成后主服务器会自动启动本地代理服务。
+命令会询问节点名称、出口模式、代理协议、本地代理端口，然后输出 Deploy Token 和一行节点安装命令。出口节点执行该命令后，会向主服务器请求 WireGuard 配置、启动 WireGuard，并完成注册。注册完成后主服务器会自动启动本地代理服务。
 
-如果出口节点是 NAT VPS，并且公网 UDP 端口映射和节点本机 WireGuard 监听端口不同，生成命令时可以传：
+为避免重复配置，Deploy Token 流程按下面规则决定配置来源：
 
-```bash
-warppool deploy-token --wg-listen-port 51820 --wg-endpoint-port 30021
-```
+- 主服务器决定：节点名称、出口模式、代理协议、本地代理端口。
+- 出口节点决定：本机 WireGuard 监听端口、自动检测或手动填写的公网端点、NAT 映射后的公网 UDP 端口。
 
-节点执行的一行安装命令会携带 `wg_listen_port` 和 `wg_endpoint_port`。节点本机继续监听 `51820`，主服务器 WireGuard 客户端连接公网端点的 `30021`。
+如果出口节点是 NAT VPS，并且公网 UDP 端口映射和节点本机 WireGuard 监听端口不同，在出口节点执行安装命令后，根据提示填写映射出来的公网 UDP 端口即可。
 
 ---
 
@@ -290,9 +293,22 @@ warppool node show nat01 # 查看节点nat01信息和运行状态
 warppool node start nat01 # 启动节点nat01对应的本地代理服务并设置开机自启
 warppool node stop nat01 # 停止本地代理服务
 warppool node status nat01 # 查看节点nat01运行状态
+warppool node mode nat01 warp # 将节点nat01切换为WARP出口，默认自动检测并安装/复用WARP
+warppool node mode nat01 direct # 将节点nat01切换回直连出口
 warppool remove nat01 # 移除节点nat01 仅移除记录
 warppool node remove nat01 --clean-wg # 移除节点nat01 并WG删除客户端配置
 ```
+
+`warppool node mode` 默认使用 Pull 方式生成一条需要在出口节点执行的命令。出口节点会自动检测 WARP：已安装则复用，未安装则自动安装。也可以指定：
+
+```bash
+warppool node mode nat01 warp --warp-install reuse # 只复用已安装的WARP，未安装则报错
+warppool node mode nat01 warp --warp-install reinstall # 强制重装WARP
+warppool node mode nat01 direct --remove-warp # 切回直连后同时卸载WARP
+warppool node mode nat01 warp --method ssh # 通过SSH自动切换，不需要手动复制命令
+```
+
+Pull 切换命令会优先读取出口节点上的 `/etc/warppool-node/state.json`，正常情况下不需要再次填写主服务器地址；旧节点没有该状态文件时，脚本会提示手动填写，或按主服务器输出的备用命令携带 `server=http://<主服务器IP>:<端口>` 执行。
 
 ### WireGuard相关
 

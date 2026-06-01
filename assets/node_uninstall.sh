@@ -188,6 +188,49 @@ $(iptables -S INPUT 2>/dev/null || true)
 EOF_RULES
 }
 
+delete_direct_forwarding_rules() {
+  local device="$1"
+  if ! command -v iptables >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: remove iptables direct forwarding rules for $device"
+    return 0
+  fi
+
+  local rule spec
+  while IFS= read -r rule; do
+    case "$rule" in
+      *" -i $device "*"-j ACCEPT"*|*" -o $device "*"-j ACCEPT"*)
+        spec="${rule#-A FORWARD }"
+        # shellcheck disable=SC2086
+        iptables -D FORWARD $spec >/dev/null 2>&1 || true
+        ;;
+    esac
+  done <<EOF_RULES
+$(iptables -S FORWARD 2>/dev/null || true)
+EOF_RULES
+
+  local client_ip=""
+  if [ -r "/etc/wireguard/$device.conf" ]; then
+    client_ip="$(awk '/AllowedIPs[[:space:]]*=/ {print $3; exit}' "/etc/wireguard/$device.conf" | cut -d/ -f1)"
+  fi
+  if [ -z "$client_ip" ]; then
+    return 0
+  fi
+  while IFS= read -r rule; do
+    case "$rule" in
+      *" -s $client_ip/32 "*"-j MASQUERADE"*)
+        spec="${rule#-A POSTROUTING }"
+        # shellcheck disable=SC2086
+        iptables -t nat -D POSTROUTING $spec >/dev/null 2>&1 || true
+        ;;
+    esac
+  done <<EOF_RULES
+$(iptables -t nat -S POSTROUTING 2>/dev/null || true)
+EOF_RULES
+}
+
 stop_legacy_pid() {
   local pid_path="$1"
   if [ ! -r "$pid_path" ]; then
@@ -288,8 +331,9 @@ main() {
     [ -n "$device" ] || continue
     validate_device "$device"
     log "removing node device: $device"
-    remove_warp_forwarding "$device"
-    remove_wireguard_device "$device"
+  remove_warp_forwarding "$device"
+  delete_direct_forwarding_rules "$device"
+  remove_wireguard_device "$device"
   done <<EOF_DEVICES
 $devices
 EOF_DEVICES
