@@ -18,6 +18,7 @@
 - [Deploy Token](#deploy-token)
 - [常用命令](#常用命令)
 - [配置](#配置)
+- [更新日志](#更新日志)
 - [安全说明](#安全说明)
 - [当前限制](#当前限制)
 
@@ -395,6 +396,12 @@ curl -fsSL https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/
 `warppool config init` 会创建这个 JSON 配置文件，并写入默认配置。它保存监听设置、默认代理设置、节点信息、Deploy Token 和 WireGuard 客户端私钥。一键安装脚本会在配置文件不存在时自动执行它。
 
 请妥善保护配置文件。
+
+---
+
+## 更新日志
+
+见 [CHANGELOG_CN.md](CHANGELOG_CN.md)。
 
 ---
 

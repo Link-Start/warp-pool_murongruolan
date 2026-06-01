@@ -18,6 +18,7 @@ WireGuard-based multi-exit proxy management for small VPS and NAT VPS nodes.
 - [Deploy Token](#deploy-token)
 - [Commands](#commands)
 - [Configuration](#configuration)
+- [Changelog](#changelog)
 - [Release Process](#release-process)
 - [Security Notes](#security-notes)
 - [Current Limitations](#current-limitations)
@@ -426,6 +427,12 @@ Default config path:
 `warppool config init` creates this JSON config file with default values. It stores listener settings, default proxy settings, node metadata, deploy tokens, and WireGuard client private keys. The one-line installer runs it automatically when the config file does not exist.
 
 Keep the config file private.
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

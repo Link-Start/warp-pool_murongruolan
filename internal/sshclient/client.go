@@ -78,6 +78,10 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Run(command string) (Result, error) {
+	return c.RunWithInput(command, "")
+}
+
+func (c *Client) RunWithInput(command string, input string) (Result, error) {
 	session, err := c.inner.NewSession()
 	if err != nil {
 		return Result{}, fmt.Errorf("create ssh session: %w", err)
@@ -87,6 +91,9 @@ func (c *Client) Run(command string) (Result, error) {
 	var stdout, stderr bytes.Buffer
 	session.Stdout = &stdout
 	session.Stderr = &stderr
+	if input != "" {
+		session.Stdin = bytes.NewReader([]byte(input))
+	}
 
 	err = session.Run(command)
 	result := Result{Stdout: stdout.String(), Stderr: stderr.String()}

@@ -131,8 +131,16 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 		return cfg, result, err
 	}
 
+	runner, err := detectRemoteRunner(client, opts.SSH.User, opts.SSH.Password)
+	if err != nil {
+		return cfg, result, err
+	}
+	if runner.UsesSudo {
+		result.Logs = append(result.Logs, "remote user is not root; using sudo for privileged commands")
+	}
+
 	command := fmt.Sprintf("bash %s mode=%s", shellPath(filepath.ToSlash(filepath.Join(opts.RemoteDir, "install.sh"))), opts.Node.ExitMode)
-	remoteResult, err := client.Run(command)
+	remoteResult, err := runner.Run(command)
 	result.Logs = append(result.Logs, remoteResult.Stdout)
 	if remoteResult.Stderr != "" {
 		result.Logs = append(result.Logs, remoteResult.Stderr)
@@ -142,7 +150,7 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	}
 
 	if wgOptions.EnableForwarding {
-		egress, err := detectEgressInterface(client)
+		egress, err := detectEgressInterface(runner)
 		if err != nil {
 			return cfg, result, err
 		}
@@ -157,11 +165,11 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	opts.Node = wireguard.ApplyPlan(opts.Node, wgPlan)
 	result.Node = opts.Node
 
-	if err := configureRemoteWireGuard(client, wgPlan, opts.RemoteDir, opts.SkipWGUp, &result); err != nil {
+	if err := configureRemoteWireGuard(runner, wgPlan, opts.RemoteDir, opts.SkipWGUp, &result); err != nil {
 		return cfg, result, err
 	}
 	if opts.Node.ExitMode == config.ExitModeWarp && !opts.SkipWGUp {
-		if err := configureRemoteWarpForwarding(client, wgPlan, opts.RemoteDir, opts.WarpPort, &result); err != nil {
+		if err := configureRemoteWarpForwarding(runner, wgPlan, opts.RemoteDir, opts.WarpPort, &result); err != nil {
 			return cfg, result, err
 		}
 	}
@@ -170,12 +178,59 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	return next, result, err
 }
 
-func configureRemoteWarpForwarding(client *sshclient.Client, plan wireguard.Plan, remoteDir string, warpPort int, result *PushResult) error {
+type RemoteRunner struct {
+	Client   *sshclient.Client
+	Sudo     string
+	Password string
+	UsesSudo bool
+}
+
+func detectRemoteRunner(client *sshclient.Client, user string, password string) (RemoteRunner, error) {
+	runner := RemoteRunner{Client: client, Password: password}
+	result, err := client.Run("id -u")
+	if err != nil {
+		return runner, err
+	}
+	if strings.TrimSpace(result.Stdout) == "0" {
+		return runner, nil
+	}
+
+	if _, err := client.Run("command -v sudo >/dev/null 2>&1"); err != nil {
+		return runner, fmt.Errorf("remote user %q is not root and sudo is not available; use root or install/configure sudo", user)
+	}
+	if password != "" {
+		if _, err := client.RunWithInput("sudo -S -p '' true", password+"\n"); err == nil {
+			runner.Sudo = "sudo -S -p ''"
+			runner.UsesSudo = true
+			return runner, nil
+		}
+	}
+	if _, err := client.Run("sudo -n true"); err == nil {
+		runner.Sudo = "sudo -n"
+		runner.UsesSudo = true
+		return runner, nil
+	}
+	return runner, fmt.Errorf("remote user %q is not root and passwordless sudo failed; use root or configure sudo", user)
+}
+
+func (r RemoteRunner) Run(command string) (sshclient.Result, error) {
+	if !r.UsesSudo {
+		return r.Client.Run(command)
+	}
+	wrapped := r.Sudo + " sh -c " + shellPath(command)
+	input := ""
+	if strings.Contains(r.Sudo, "-S") && r.Password != "" {
+		input = r.Password + "\n"
+	}
+	return r.Client.RunWithInput(wrapped, input)
+}
+
+func configureRemoteWarpForwarding(runner RemoteRunner, plan wireguard.Plan, remoteDir string, warpPort int, result *PushResult) error {
 	if warpPort == 0 {
 		warpPort = 14000
 	}
 	command := warpForwardCommand(plan, remoteDir, warpPort)
-	remoteResult, err := client.Run(command)
+	remoteResult, err := runner.Run(command)
 	if remoteResult.Stdout != "" {
 		result.Logs = append(result.Logs, remoteResult.Stdout)
 	}
@@ -266,8 +321,16 @@ func SwitchModeSSH(opts ModeSwitchOptions) (ModeSwitchResult, error) {
 	}
 	result.Logs = append(result.Logs, uploadResult.Logs...)
 
+	runner, err := detectRemoteRunner(client, opts.SSH.User, opts.SSH.Password)
+	if err != nil {
+		return result, err
+	}
+	if runner.UsesSudo {
+		result.Logs = append(result.Logs, "remote user is not root; using sudo for privileged commands")
+	}
+
 	command := nodeModeSSHCommand(opts)
-	remoteResult, err := client.Run(command)
+	remoteResult, err := runner.Run(command)
 	if remoteResult.Stdout != "" {
 		result.Logs = append(result.Logs, remoteResult.Stdout)
 	}
@@ -350,25 +413,25 @@ func shellPath(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
-func configureRemoteWireGuard(client *sshclient.Client, plan wireguard.Plan, remoteDir string, skipUp bool, result *PushResult) error {
-	if _, err := client.Run("mkdir -p /etc/wireguard"); err != nil {
+func configureRemoteWireGuard(runner RemoteRunner, plan wireguard.Plan, remoteDir string, skipUp bool, result *PushResult) error {
+	if _, err := runner.Run("mkdir -p /etc/wireguard"); err != nil {
 		return err
 	}
-	if err := installRemoteNodeUninstaller(client, remoteDir, result); err != nil {
+	if err := installRemoteNodeUninstaller(runner, remoteDir, result); err != nil {
 		return err
 	}
-	if err := runWireGuardPreflight(client, plan, remoteDir, result); err != nil {
+	if err := runWireGuardPreflight(runner, plan, remoteDir, result); err != nil {
 		return err
 	}
 	if plan.EnableForwarding {
-		if _, err := client.Run("mkdir -p /etc/sysctl.d && printf 'net.ipv4.ip_forward=1\\n' >/etc/sysctl.d/99-warppool.conf && sysctl -w net.ipv4.ip_forward=1"); err != nil {
+		if _, err := runner.Run("mkdir -p /etc/sysctl.d && printf 'net.ipv4.ip_forward=1\\n' >/etc/sysctl.d/99-warppool.conf && sysctl -w net.ipv4.ip_forward=1"); err != nil {
 			return err
 		}
 		result.Logs = append(result.Logs, "enabled IPv4 forwarding")
 	}
 
 	remotePath := "/etc/wireguard/" + plan.Device + ".conf"
-	if err := client.Upload(remotePath, []byte(plan.ServerConfig), "0600"); err != nil {
+	if _, err := runner.Run(fmt.Sprintf("cat > %s <<'EOF'\n%s\nEOF\nchmod 0600 %s", shellPath(remotePath), plan.ServerConfig, shellPath(remotePath))); err != nil {
 		return err
 	}
 	result.Logs = append(result.Logs, "uploaded WireGuard config: "+remotePath)
@@ -384,7 +447,7 @@ func configureRemoteWireGuard(client *sshclient.Client, plan wireguard.Plan, rem
 		"systemctl enable " + shellPath("wg-quick@"+plan.Device) + " >/dev/null 2>&1 || true",
 	}
 	for _, command := range commands {
-		remoteResult, err := client.Run(command)
+		remoteResult, err := runner.Run(command)
 		if remoteResult.Stdout != "" {
 			result.Logs = append(result.Logs, remoteResult.Stdout)
 		}
@@ -400,9 +463,9 @@ func configureRemoteWireGuard(client *sshclient.Client, plan wireguard.Plan, rem
 	return nil
 }
 
-func installRemoteNodeUninstaller(client *sshclient.Client, remoteDir string, result *PushResult) error {
+func installRemoteNodeUninstaller(runner RemoteRunner, remoteDir string, result *PushResult) error {
 	command := installRemoteNodeUninstallerCommand(remoteDir)
-	remoteResult, err := client.Run(command)
+	remoteResult, err := runner.Run(command)
 	if remoteResult.Stdout != "" {
 		result.Logs = append(result.Logs, remoteResult.Stdout)
 	}
@@ -425,7 +488,7 @@ func installRemoteNodeUninstallerCommand(remoteDir string) string {
 	)
 }
 
-func runWireGuardPreflight(client *sshclient.Client, plan wireguard.Plan, remoteDir string, result *PushResult) error {
+func runWireGuardPreflight(runner RemoteRunner, plan wireguard.Plan, remoteDir string, result *PushResult) error {
 	command := wireGuardPreflightCommand(wireGuardPreflightOptions{
 		RemoteDir:     remoteDir,
 		Device:        plan.Device,
@@ -433,7 +496,7 @@ func runWireGuardPreflight(client *sshclient.Client, plan wireguard.Plan, remote
 		ClientAddress: plan.ClientAddress,
 		ListenPort:    plan.ListenPort,
 	})
-	remoteResult, err := client.Run(command)
+	remoteResult, err := runner.Run(command)
 	if remoteResult.Stdout != "" {
 		result.Logs = append(result.Logs, remoteResult.Stdout)
 	}
@@ -467,8 +530,8 @@ func wireGuardPreflightCommand(opts wireGuardPreflightOptions) string {
 	)
 }
 
-func detectEgressInterface(client *sshclient.Client) (string, error) {
-	result, err := client.Run("ip route show default 0.0.0.0/0 | awk 'NR==1 {for (i=1;i<=NF;i++) if ($i==\"dev\") {print $(i+1); exit}}'")
+func detectEgressInterface(runner RemoteRunner) (string, error) {
+	result, err := runner.Run("ip route show default 0.0.0.0/0 | awk 'NR==1 {for (i=1;i<=NF;i++) if ($i==\"dev\") {print $(i+1); exit}}'")
 	if err != nil {
 		return "", err
 	}
