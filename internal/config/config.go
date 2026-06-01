@@ -434,7 +434,12 @@ func AddDeployToken(cfg Config, token DeployToken) (Config, error) {
 		return cfg, err
 	}
 
+	now := time.Now().UTC()
+	nextTokens := cfg.Tokens[:0]
 	for _, existing := range cfg.Tokens {
+		if !existing.Used && deployTokenExpired(existing, now) {
+			continue
+		}
 		if existing.Token == token.Token {
 			return cfg, errors.New("deploy token already exists")
 		}
@@ -447,8 +452,10 @@ func AddDeployToken(cfg Config, token DeployToken) (Config, error) {
 		if existing.Node.BindHost == token.Node.BindHost && existing.Node.LocalPort == token.Node.LocalPort {
 			return cfg, fmt.Errorf("unused deploy token already reserves local port: %s:%d", token.Node.BindHost, token.Node.LocalPort)
 		}
+		nextTokens = append(nextTokens, existing)
 	}
 
+	cfg.Tokens = nextTokens
 	cfg.Tokens = append(cfg.Tokens, token)
 	return cfg, nil
 }

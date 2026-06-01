@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/murongruolan/warp-pool/internal/config"
 	"github.com/murongruolan/warp-pool/internal/deploy"
@@ -247,6 +248,14 @@ func validateLocalProxyPort(cfg config.Config, bindHost string, port int) error 
 	for _, node := range cfg.Nodes {
 		if node.BindHost == bindHost && node.LocalPort == port {
 			return fmt.Errorf("local proxy port already used by node %s: %s:%d", node.Name, bindHost, port)
+		}
+	}
+	for _, token := range cfg.Tokens {
+		if token.Used || deployTokenStatus(token, time.Now().UTC()) == "expired" {
+			continue
+		}
+		if token.Node.BindHost == bindHost && token.Node.LocalPort == port {
+			return fmt.Errorf("unused deploy token already reserves local port for node %s: %s:%d", token.Node.Name, bindHost, port)
 		}
 	}
 	return config.CheckPortAvailable(bindHost, port)

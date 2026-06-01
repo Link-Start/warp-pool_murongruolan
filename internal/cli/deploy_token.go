@@ -46,6 +46,12 @@ func newDeployTokenCreateCommandWithHooks(checkPort func(string, int) error, che
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
+			if next, removed := config.PruneExpiredDeployTokens(cfg, time.Now().UTC()); removed > 0 {
+				cfg = next
+				if err := config.SaveExisting(path, cfg); err != nil {
+					return fmt.Errorf("save pruned deploy tokens: %w", err)
+				}
+			}
 			language := cfgLanguage(cfg)
 			prompt := newPromptIOWithLanguage(cmd.OutOrStdout(), language)
 			if err := promptDeployTokenOptions(prompt, cfg, &node); err != nil {
@@ -351,9 +357,21 @@ func shortDeployToken(value string) string {
 func promptDeployTokenOptions(prompt promptIO, cfg config.Config, node *config.Node) error {
 	var err error
 	language := prompt.language
-	node.Name, err = prompt.askRequired(tr(language, "Node name", "节点名称"), node.Name)
-	if err != nil {
-		return err
+	nameFromFlag := strings.TrimSpace(node.Name) != ""
+	for {
+		node.Name, err = prompt.askRequired(tr(language, "Node name", "节点名称"), node.Name)
+		if err != nil {
+			return err
+		}
+		if err := validateDeployTokenNodeNameAvailable(cfg, node.Name); err != nil {
+			if nameFromFlag {
+				return err
+			}
+			node.Name = ""
+			fmt.Fprintf(prompt.out, "%v\n", err)
+			continue
+		}
+		break
 	}
 	node.ExitMode, err = prompt.askMenu(tr(language, "Exit mode", "出口模式"), node.ExitMode, defaultString(cfg.Defaults.ExitMode, config.ExitModeDirect), []menuOption{
 		{Label: "direct", Value: config.ExitModeDirect},
@@ -376,6 +394,24 @@ func promptDeployTokenOptions(prompt promptIO, cfg config.Config, node *config.N
 	}
 	node.LocalPort, err = promptAvailableLocalPort(prompt, cfg, bindHost, node.LocalPort)
 	return err
+}
+
+func validateDeployTokenNodeNameAvailable(cfg config.Config, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("node name cannot be empty")
+	}
+	if _, ok := config.FindNode(cfg, name); ok {
+		return fmt.Errorf("node already exists: %s", name)
+	}
+	for _, token := range cfg.Tokens {
+		if token.Used || deployTokenStatus(token, time.Now().UTC()) == "expired" {
+			continue
+		}
+		if token.Node.Name == name {
+			return fmt.Errorf("unused deploy token already exists for node: %s", name)
+		}
+	}
+	return nil
 }
 
 func checkListenReachable(host string, port int) error {

@@ -431,6 +431,41 @@ func TestPruneExpiredDeployTokens(t *testing.T) {
 	}
 }
 
+func TestAddDeployTokenPrunesExpiredReservations(t *testing.T) {
+	cfg := Default()
+	cfg.Tokens = []DeployToken{
+		{
+			Token:     "expired",
+			ExpiresAt: time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
+			Node: Node{
+				Name:      "nat1",
+				ExitMode:  ExitModeDirect,
+				Proxy:     ProxyMixed,
+				BindHost:  "127.0.0.1",
+				LocalPort: 10013,
+			},
+		},
+	}
+
+	next, err := AddDeployToken(cfg, DeployToken{
+		Token:     "new",
+		ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+		Node: Node{
+			Name:      "nat1",
+			ExitMode:  ExitModeDirect,
+			Proxy:     ProxyMixed,
+			BindHost:  "127.0.0.1",
+			LocalPort: 10013,
+		},
+	})
+	if err != nil {
+		t.Fatalf("add token should prune expired reservation: %v", err)
+	}
+	if len(next.Tokens) != 1 || next.Tokens[0].Token != "new" {
+		t.Fatalf("unexpected tokens after prune: %#v", next.Tokens)
+	}
+}
+
 func TestLoadRejectsOpenPermissionsOnUnix(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("windows permissions differ")

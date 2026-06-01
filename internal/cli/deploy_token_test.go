@@ -109,6 +109,78 @@ func TestDeployTokenOutputKeepsNodeSideWireGuardInteractive(t *testing.T) {
 	}
 }
 
+func TestDeployTokenCreatePrunesExpiredReservations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := config.Default()
+	cfg.Listen.Enabled = true
+	cfg.Tokens = []config.DeployToken{
+		{
+			Token:     "expired",
+			ExpiresAt: time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
+			Node: config.Node{
+				Name:      "节点01",
+				ExitMode:  config.ExitModeDirect,
+				Proxy:     config.ProxyMixed,
+				BindHost:  "127.0.0.1",
+				LocalPort: 10013,
+			},
+		},
+	}
+	if err := config.Save(path, cfg, true); err != nil {
+		t.Fatal(err)
+	}
+	oldConfigPath := configPath
+	oldInput := inputReader
+	configPath = path
+	inputReader = bytes.NewBufferString("")
+	t.Cleanup(func() {
+		configPath = oldConfigPath
+		inputReader = oldInput
+	})
+
+	var out bytes.Buffer
+	cmd := newDeployTokenCreateCommandWithHooks(
+		func(string, int) error { return nil },
+		func(string, int) error { return nil },
+		func(...string) error { return nil },
+		func(string) error { return nil },
+	)
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{
+		"--name", "节点01",
+		"--exit-mode", config.ExitModeDirect,
+		"--proxy", config.ProxyMixed,
+		"--port", "10013",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	next, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next.Tokens) != 1 || next.Tokens[0].Token == "expired" {
+		t.Fatalf("expired reservation was not pruned: %#v", next.Tokens)
+	}
+}
+
+func TestValidateDeployTokenNodeNameAvailableRejectsUnusedToken(t *testing.T) {
+	cfg := config.Default()
+	cfg.Tokens = []config.DeployToken{
+		{
+			Token:     "active",
+			ExpiresAt: time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+			Node:      config.Node{Name: "节点01"},
+		},
+	}
+
+	err := validateDeployTokenNodeNameAvailable(cfg, "节点01")
+	if err == nil || !strings.Contains(err.Error(), "unused deploy token") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestEnsureRegistrationListenerReportsPortConflict(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.Default()
