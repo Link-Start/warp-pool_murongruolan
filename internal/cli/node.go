@@ -453,6 +453,10 @@ func runNodeModePull(cmd *cobra.Command, path string, cfg config.Config, node co
 	fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(opts.Language, "Node:", "节点："), node.Name)
 	fmt.Fprintf(cmd.OutOrStdout(), "%s %s -> %s\n", tr(opts.Language, "Mode:", "出口模式："), node.ExitMode, targetMode)
 	fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(opts.Language, "expires at:", "过期时间："), expiresAt.Format(time.RFC3339))
+	fmt.Fprintln(cmd.OutOrStdout(), tr(opts.Language,
+		"IMPORTANT: this mode-switch token is time-limited and one-time use. If it expires, rerun `warppool node mode`.",
+		"重要提示：此模式切换 token 有有效期且只能使用一次。过期后请重新执行 `warppool node mode`。",
+	))
 	fmt.Fprintln(cmd.OutOrStdout(), divider)
 	fmt.Fprintln(cmd.OutOrStdout(), tr(opts.Language, "Run this command on the exit node:", "请在出口节点执行以下命令："))
 	fmt.Fprintln(cmd.OutOrStdout(), command)

@@ -97,7 +97,7 @@ func TestDeployTokenOutputKeepsNodeSideWireGuardInteractive(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := out.String()
-	for _, want := range []string{"Deploy Token", "安装命令", "节点侧只会询问本机 WireGuard/NAT 端点信息", "服务商控制台放行这些入站端口：8080/tcp", "======================"} {
+	for _, want := range []string{"Deploy Token", "重要提示：此 token 有有效期且只能使用一次", "安装命令", "节点侧只会询问本机 WireGuard/NAT 端点信息", "服务商控制台放行这些入站端口：8080/tcp", "======================"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in output:\n%s", want, text)
 		}

@@ -112,6 +112,10 @@ func newDeployTokenCreateCommandWithHooks(checkPort func(string, int) error, che
 			fmt.Fprintf(cmd.OutOrStdout(), "%s\n", tr(language, "Deploy Token:", "Deploy Token："))
 			fmt.Fprintln(cmd.OutOrStdout(), tokenValue)
 			fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(language, "expires at:", "过期时间："), expiresAt.Format(time.RFC3339))
+			fmt.Fprintln(cmd.OutOrStdout(), tr(language,
+				"IMPORTANT: this token is time-limited and one-time use. If it expires, generate a new one with `warppool deploy-token`.",
+				"重要提示：此 token 有有效期且只能使用一次。过期后请重新执行 `warppool deploy-token` 生成。",
+			))
 			fmt.Fprintln(cmd.OutOrStdout(), divider)
 			fmt.Fprintln(cmd.OutOrStdout(), tr(language, "Install command:", "安装命令："))
 			installArgs := fmt.Sprintf("token=%s server=%s lang=%s", tokenValue, serverURL, language)
