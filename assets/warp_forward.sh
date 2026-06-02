@@ -17,6 +17,7 @@ STATE_DIR="/var/lib/warppool/warp-forward"
 AUTO_INSTALL_SINGBOX="true"
 VERIFY_WARP="true"
 DRY_RUN="false"
+SINGBOX_FEATURE_FALLBACK_DONE="false"
 
 log() {
   printf '[WarpPool][warp-forward] %s\n' "$*"
@@ -192,22 +193,104 @@ script_dir() {
   cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd
 }
 
+singbox_can_run() {
+  local binary="$1"
+  [ -x "$binary" ] || return 1
+  "$binary" version >/dev/null 2>&1
+}
+
+singbox_check_config_output() {
+  local path="$1"
+  "$SINGBOX_BIN" check -c "$path" 2>&1
+}
+
+ensure_singbox_config_supported() {
+  local path="$1" output
+  if output="$(singbox_check_config_output "$path")"; then
+    return 0
+  fi
+
+  if [ "$AUTO_INSTALL_SINGBOX" = "true" ] && [ "$SINGBOX_FEATURE_FALLBACK_DONE" != "true" ]; then
+    log "current sing-box cannot load WarpPool WARP config, falling back to GitHub build"
+    printf '%s\n' "$output" >&2
+    SINGBOX_FEATURE_FALLBACK_DONE="true"
+    install_singbox default
+    if output="$(singbox_check_config_output "$path")"; then
+      return 0
+    fi
+  fi
+
+  printf '%s\n' "$output" >&2
+  fail "sing-box config check failed; install a newer sing-box or use WarpPool managed GitHub build"
+}
+
+resolve_installed_singbox_path() {
+  if singbox_can_run "/usr/local/lib/warppool/bin/sing-box"; then
+    printf '%s\n' "/usr/local/lib/warppool/bin/sing-box"
+    return 0
+  fi
+  local system_binary
+  system_binary="$(command -v sing-box 2>/dev/null || true)"
+  if [ -n "$system_binary" ] && singbox_can_run "$system_binary"; then
+    printf '%s\n' "$system_binary"
+    return 0
+  fi
+  return 1
+}
+
+install_singbox() {
+  local installer source
+  source="${1:-auto}"
+  installer="$(script_dir)/singbox_install.sh"
+  if [ ! -r "$installer" ]; then
+    fail "sing-box not found and installer missing: $installer"
+  fi
+
+  log "installing sing-box, source=$source"
+  run bash "$installer" --yes "source=$source" variant=auto install_dir=/usr/local/lib/warppool/bin
+  if [ "$DRY_RUN" = "true" ]; then
+    SINGBOX_BIN="/usr/local/lib/warppool/bin/sing-box"
+    return 0
+  fi
+  SINGBOX_BIN="$(resolve_installed_singbox_path || true)"
+  [ -n "$SINGBOX_BIN" ] || fail "sing-box installation did not produce a discoverable binary"
+  if [ "$DRY_RUN" != "true" ] && ! singbox_can_run "$SINGBOX_BIN"; then
+    fail "sing-box installation did not produce a runnable binary: $SINGBOX_BIN"
+  fi
+}
+
 resolve_singbox() {
   if [ -n "$SINGBOX_BIN" ]; then
-    if [ ! -x "$SINGBOX_BIN" ]; then
-      fail "sing-box binary is not executable: $SINGBOX_BIN"
+    if ! singbox_can_run "$SINGBOX_BIN"; then
+      fail "sing-box binary cannot run: $SINGBOX_BIN"
     fi
     return 0
   fi
 
   if [ -x "/usr/local/lib/warppool/bin/sing-box" ]; then
     SINGBOX_BIN="/usr/local/lib/warppool/bin/sing-box"
-    return 0
+    if singbox_can_run "$SINGBOX_BIN"; then
+      return 0
+    fi
+    log "existing sing-box cannot run, reinstalling: $SINGBOX_BIN"
+    if [ "$AUTO_INSTALL_SINGBOX" = "true" ]; then
+      install_singbox auto
+      return 0
+    fi
+    fail "existing sing-box cannot run: $SINGBOX_BIN"
   fi
 
   if command -v sing-box >/dev/null 2>&1; then
     SINGBOX_BIN="$(command -v sing-box)"
-    return 0
+    if singbox_can_run "$SINGBOX_BIN"; then
+      return 0
+    fi
+    log "system sing-box cannot run, installing WarpPool managed sing-box: $SINGBOX_BIN"
+    if [ "$AUTO_INSTALL_SINGBOX" = "true" ]; then
+      install_singbox auto
+      return 0
+    fi
+    fail "system sing-box cannot run: $SINGBOX_BIN"
   fi
 
   if [ "$AUTO_INSTALL_SINGBOX" != "true" ]; then
@@ -219,18 +302,8 @@ resolve_singbox() {
     fail "sing-box not found; install it or set auto_install_singbox=true"
   fi
 
-  local installer
-  installer="$(script_dir)/singbox_install.sh"
-  if [ ! -r "$installer" ]; then
-    fail "sing-box not found and installer missing: $installer"
-  fi
-
-  log "sing-box not found, installing to /usr/local/lib/warppool/bin"
-  run bash "$installer" --yes source=default install_dir=/usr/local/lib/warppool/bin
-  SINGBOX_BIN="/usr/local/lib/warppool/bin/sing-box"
-  if [ "$DRY_RUN" != "true" ] && [ ! -x "$SINGBOX_BIN" ]; then
-    fail "sing-box installation did not produce executable: $SINGBOX_BIN"
-  fi
+  log "sing-box not found"
+  install_singbox auto
 }
 
 verify_warp_proxy() {
@@ -497,7 +570,7 @@ probe_wireguard_backend() {
       return 0
     fi
     write_wireguard_singbox_config "$probe_config" "$WARP_PROBE_PORT" "$host" "$port" "mixed"
-    "$SINGBOX_BIN" check -c "$probe_config" >/dev/null
+    ensure_singbox_config_supported "$probe_config"
     "$SINGBOX_BIN" run -c "$probe_config" >"$probe_log" 2>&1 &
     probe_pid="$!"
     sleep 3

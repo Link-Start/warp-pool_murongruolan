@@ -621,7 +621,7 @@ refresh_singbox() {
     return 0
   fi
   if [ -r "$script" ]; then
-    quiet_run bash "$script" --yes source=default || log "warning: failed to refresh sing-box"
+    quiet_run bash "$script" --yes source=auto || log "warning: failed to refresh sing-box"
   else
     log "warning: sing-box installer not found after upgrade: $script"
   fi

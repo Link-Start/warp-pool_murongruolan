@@ -531,7 +531,7 @@ install_singbox() {
     return 0
   fi
 
-  bash "$script" --yes source=default
+  bash "$script" --yes source=auto
 }
 
 initialize_config() {

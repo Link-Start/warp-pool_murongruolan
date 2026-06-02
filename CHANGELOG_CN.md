@@ -1,5 +1,13 @@
 # 更新日志
 
+## v0.1.9
+
+- 新增 Alpine WARP 支持，基于 `wgcf` 生成 WireGuard 配置，并通过 sing-box 内置 WireGuard endpoint 出口。
+- Alpine WARP 端点探测改为优先 IPv6，失败后回退 IPv4，最后兜底原始域名。
+- Alpine 上 sing-box 安装优先使用系统仓库：`apk update && apk add --no-cache sing-box`。
+- 当 Alpine 仓库包不存在、无法运行，或无法加载 WarpPool 生成的 WARP 配置时，自动回退到 GitHub musl 版本。
+- 修复 Alpine WARP 部署时误下载非 musl 版 sing-box 导致二进制无法运行的问题。
+
 ## v0.1.8
 
 - 正式优化 1G 级别小硬盘出口节点的 WARP 模式安装。Debian/Ubuntu 安装脚本不再安装 `wireguard` 元包，只安装必要的 WireGuard tools，尽量使用 `--no-install-recommends`，并在安装步骤后清理软件包缓存。

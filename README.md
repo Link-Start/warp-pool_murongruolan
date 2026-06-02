@@ -97,7 +97,7 @@ Exit node
 | Debian 11+ | Supported |
 | Alpine 3.20+ | Supported |
 
-WARP mode is supported on Ubuntu/Debian and Alpine. Ubuntu/Debian use the official Cloudflare WARP client when available. Alpine uses `wgcf` to generate a WARP WireGuard profile and sing-box's embedded WireGuard endpoint, because Cloudflare does not provide first-class Alpine `apk` packages.
+WARP mode is supported on Ubuntu/Debian and Alpine. Ubuntu/Debian use the official Cloudflare WARP client when available. Alpine uses `wgcf` to generate a WARP WireGuard profile and sing-box's embedded WireGuard endpoint. On Alpine, WarpPool first runs `apk update` and installs `sing-box` from the Alpine package repository when available; if the package is unavailable, cannot run, or cannot load the generated WARP config, WarpPool falls back to the GitHub musl build.
 
 Recommended disk size: around 1 GB. The installer is optimized for small disks by installing only required WireGuard tools, avoiding the WireGuard meta package on Debian/Ubuntu, and cleaning package caches after installation steps.
 
@@ -257,6 +257,16 @@ wgcf generated WARP WireGuard profile
   -> sing-box embedded WireGuard endpoint
   -> endpoint probing: IPv6 first, IPv4 fallback, domain fallback
 ```
+
+For sing-box on Alpine, WarpPool uses this priority:
+
+```text
+1. Existing runnable sing-box
+2. apk update && apk add --no-cache sing-box
+3. GitHub musl sing-box package fallback
+```
+
+After installation, WarpPool checks that sing-box can load the generated WARP config. If the Alpine repository package is too old or incompatible, WarpPool automatically falls back to the GitHub musl build.
 
 The installer verifies WARP by checking `warp=on`. If all endpoint candidates fail, it reports the tried path and asks you to check IPv6 connectivity, UDP 2408 outbound access, DNS, or provider WARP restrictions.
 

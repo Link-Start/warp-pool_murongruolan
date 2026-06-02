@@ -133,8 +133,10 @@ maybe_install_warp() {
   local dir
   dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
   [ -r "$dir/warp_wgcf.sh" ] || fail "WARP wgcf helper not found: $dir/warp_wgcf.sh"
+  [ -r "$dir/singbox_install.sh" ] || fail "sing-box installer not found: $dir/singbox_install.sh"
   log "Alpine WARP mode uses wgcf + sing-box embedded WireGuard endpoint"
   run bash "$dir/warp_wgcf.sh" policy=auto
+  run bash "$dir/singbox_install.sh" --yes source=auto variant=auto install_dir=/usr/local/lib/warppool/bin
 }
 
 detect_endpoint() {

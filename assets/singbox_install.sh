@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SOURCE="${WARPOOL_SINGBOX_SOURCE:-}"
+SOURCE="${WARPOOL_SINGBOX_SOURCE:-auto}"
 VERSION="${WARPOOL_SINGBOX_VERSION:-latest}"
-VARIANT="${WARPOOL_SINGBOX_VARIANT:-default}"
+VARIANT="${WARPOOL_SINGBOX_VARIANT:-auto}"
 CUSTOM_URL="${WARPOOL_SINGBOX_URL:-}"
 INSTALL_DIR="${WARPOOL_SINGBOX_INSTALL_DIR:-/usr/local/lib/warppool/bin}"
 DRY_RUN="false"
@@ -47,25 +47,28 @@ usage() {
 WarpPool sing-box installer
 
 Usage:
-  bash singbox_install.sh [source=default|custom|existing] [url=https://...] [version=latest|v1.13.12] [variant=default|glibc|musl] [install_dir=/path] [--dry-run] [--yes]
+  bash singbox_install.sh [source=auto|default|custom|existing] [url=https://...] [version=latest|v1.13.12] [variant=auto|default|glibc|musl] [install_dir=/path] [--dry-run] [--yes]
 
 Sources:
+  auto      Prefer system package on Alpine, then fall back to GitHub release.
   default   Use WarpPool built-in GitHub release URL.
   custom    Download from a user-provided URL.
   existing  Do not download; only verify an existing sing-box binary.
 
 Variants:
+  auto      Use musl build on Alpine/musl systems, otherwise use the default build.
   default   sing-box-<version>-linux-<arch>.tar.gz
   glibc     sing-box-<version>-linux-<arch>-glibc.tar.gz
   musl      sing-box-<version>-linux-<arch>-musl.tar.gz
 
 Examples:
   bash singbox_install.sh
+  bash singbox_install.sh --yes source=auto
   bash singbox_install.sh --yes source=default
   bash singbox_install.sh source=default variant=glibc
   bash singbox_install.sh source=custom url=https://example.com/sing-box-linux-amd64.tar.gz
   bash singbox_install.sh source=existing
-  bash singbox_install.sh --dry-run source=default install_dir=/tmp/warppool-bin
+  bash singbox_install.sh --dry-run source=auto install_dir=/tmp/warppool-bin
 USAGE
 }
 
@@ -143,8 +146,14 @@ choose_source() {
 
 normalize_source() {
   case "$SOURCE" in
+    auto|"")
+      SOURCE="auto"
+      ;;
     default|github|builtin|system)
       SOURCE="default"
+      ;;
+    apk|alpine)
+      SOURCE="apk"
       ;;
     custom|manual)
       SOURCE="custom"
@@ -153,14 +162,18 @@ normalize_source() {
       SOURCE="existing"
       ;;
     *)
-      fail "unsupported source: $SOURCE, expected default, custom, or existing"
+      fail "unsupported source: $SOURCE, expected auto, default, apk, custom, or existing"
       ;;
   esac
 }
 
 normalize_variant() {
   case "$VARIANT" in
-    default|"")
+    auto|"")
+      VARIANT="auto"
+      SINGBOX_VARIANT_SUFFIX=""
+      ;;
+    default)
       SINGBOX_VARIANT_SUFFIX=""
       ;;
     glibc|musl)
@@ -170,6 +183,35 @@ normalize_variant() {
       fail "unsupported variant: $VARIANT, expected default, glibc, or musl"
       ;;
   esac
+}
+
+detect_musl_system() {
+  if [ -f /etc/alpine-release ]; then
+    return 0
+  fi
+  if ls /lib/ld-musl-*.so.1 >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
+    return 0
+  fi
+  return 1
+}
+
+resolve_auto_variant() {
+  if [ "$VARIANT" != "auto" ]; then
+    return 0
+  fi
+
+  if detect_musl_system; then
+    VARIANT="musl"
+    SINGBOX_VARIANT_SUFFIX="-musl"
+    log "detected Alpine/musl system, using sing-box musl build"
+    return 0
+  fi
+
+  VARIANT="default"
+  SINGBOX_VARIANT_SUFFIX=""
 }
 
 require_command() {
@@ -227,6 +269,7 @@ resolve_fixed_version() {
 }
 
 build_default_url() {
+  resolve_auto_variant
   if [ "$VERSION" = "latest" ]; then
     resolve_latest_version
   else
@@ -275,8 +318,72 @@ verify_existing() {
   "$binary" version | head -n 1
 }
 
+verify_binary() {
+  local binary="$1"
+  [ -x "$binary" ] || return 1
+  "$binary" version >/dev/null 2>&1
+}
+
+verify_installed_target() {
+  local target="$1" version_line
+  "$target" version >/dev/null 2>&1 || fail "installed sing-box cannot run: $target; try a glibc/musl-specific custom URL"
+  version_line="$("$target" version | head -n 1)"
+  log "installed $version_line to $target"
+}
+
+install_from_apk() {
+  if ! command -v apk >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: apk update"
+    log "dry-run: apk add --no-cache sing-box"
+    log "dry-run: verify system sing-box"
+    return 0
+  fi
+
+  if [ "$(id -u)" -ne 0 ]; then
+    log "apk source skipped: root is required to install Alpine package"
+    return 1
+  fi
+
+  log "updating Alpine package index"
+  apk update || return 1
+  log "installing sing-box from Alpine package repository"
+  apk add --no-cache sing-box || return 1
+  if ! command -v sing-box >/dev/null 2>&1; then
+    log "apk installed sing-box package but sing-box command was not found"
+    return 1
+  fi
+  if ! verify_binary "$(command -v sing-box)"; then
+    log "apk installed sing-box but it cannot run"
+    return 1
+  fi
+  sing-box version | head -n 1
+  log "using Alpine packaged sing-box: $(command -v sing-box)"
+  return 0
+}
+
 prepare_download_url() {
   case "$SOURCE" in
+    auto)
+      if detect_musl_system && install_from_apk; then
+        SOURCE="apk"
+        return 0
+      fi
+      if detect_musl_system; then
+        log "Alpine apk sing-box unavailable or unusable, falling back to GitHub musl build"
+        VARIANT="musl"
+        SINGBOX_VARIANT_SUFFIX="-musl"
+      fi
+      SOURCE="default"
+      build_default_url
+      ;;
+    apk)
+      install_from_apk || fail "failed to install runnable sing-box from Alpine apk repository"
+      return 0
+      ;;
     default)
       build_default_url
       ;;
@@ -322,8 +429,12 @@ extract_archive_binary() {
 }
 
 download_and_install() {
-  local target source_file archive_name binary version_line
+  local target source_file archive_name binary
   target="$INSTALL_DIR/sing-box"
+
+  if [ "$SOURCE" = "apk" ]; then
+    return 0
+  fi
 
   if [ "$DRY_RUN" = "true" ]; then
     log "dry-run: source=$SOURCE"
@@ -355,9 +466,7 @@ download_and_install() {
   chmod 0755 "$tmp_target" || fail "failed to chmod sing-box: $tmp_target"
   mv -f "$tmp_target" "$target" || fail "failed to replace sing-box at $target"
   tmp_target=""
-  "$target" version >/dev/null 2>&1 || fail "installed sing-box cannot run: $target; try a glibc/musl-specific custom URL"
-  version_line="$("$target" version | head -n 1)"
-  log "installed $version_line to $target"
+  verify_installed_target "$target"
 }
 
 main() {
