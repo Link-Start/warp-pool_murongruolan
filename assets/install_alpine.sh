@@ -122,7 +122,7 @@ install_node_uninstaller() {
 
 maybe_install_warp() {
   if [ "$MODE" = "direct" ]; then
-    log "direct mode selected, skipping Cloudflare WARP installation"
+    log "direct mode selected, skipping WARP installation"
     return 0
   fi
 
@@ -130,7 +130,11 @@ maybe_install_warp() {
     fail "unsupported mode: $MODE"
   fi
 
-  fail "Cloudflare official WARP client does not provide first-class Alpine packages; use direct mode or a supported OS"
+  local dir
+  dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+  [ -r "$dir/warp_wgcf.sh" ] || fail "WARP wgcf helper not found: $dir/warp_wgcf.sh"
+  log "Alpine WARP mode uses wgcf + sing-box embedded WireGuard endpoint"
+  run bash "$dir/warp_wgcf.sh" policy=auto
 }
 
 detect_endpoint() {
@@ -313,6 +317,16 @@ enable_direct_forwarding() {
   iptables -t nat -C POSTROUTING -s "$client_ip/32" -o "$egress" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s "$client_ip/32" -o "$egress" -j MASQUERADE
 }
 
+maybe_enable_warp_forwarding() {
+  if [ "$MODE" != "warp" ]; then
+    return 0
+  fi
+  local dir
+  dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+  [ -r "$dir/warp_forward.sh" ] || fail "WARP forward helper not found: $dir/warp_forward.sh"
+  run bash "$dir/warp_forward.sh" action=up "device=$WG_DEVICE" "client_addr=$WG_CLIENT_ADDR" "server_addr=$WG_SERVER_ADDR" backend=wireguard
+}
+
 register_node() {
   if [ -z "$TOKEN" ] && [ -z "$SERVER" ]; then
     return 0
@@ -349,6 +363,7 @@ main() {
   if [ -n "$TOKEN" ] && [ -n "$SERVER" ]; then
     start_remote_wireguard
     enable_direct_forwarding
+    maybe_enable_warp_forwarding
     write_node_state
     log "completing node registration"
     run curl -fsS \

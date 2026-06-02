@@ -497,6 +497,7 @@ prepare_child_script() {
   child="$DOWNLOAD_DIR/$CHILD_SCRIPT"
   download_script "$CHILD_SCRIPT" "$child"
   download_script "warp_install.sh" "$DOWNLOAD_DIR/warp_install.sh"
+  download_script "warp_wgcf.sh" "$DOWNLOAD_DIR/warp_wgcf.sh"
   download_script "wg_preflight.sh" "$DOWNLOAD_DIR/wg_preflight.sh"
   download_script "warp_forward.sh" "$DOWNLOAD_DIR/warp_forward.sh"
   download_script "singbox_install.sh" "$DOWNLOAD_DIR/singbox_install.sh"
