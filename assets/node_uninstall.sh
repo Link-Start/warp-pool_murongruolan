@@ -285,10 +285,24 @@ remaining_warppool_configs() {
 }
 
 cleanup_global_warppool_state_if_empty() {
+  local alias_path alias_target
   if remaining_warppool_configs; then
     return 0
   fi
   run rm -f /etc/sysctl.d/99-warppool.conf
+  alias_path="/usr/local/bin/wpl-node-uninstall"
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: remove alias if it points to WarpPool node uninstaller: $alias_path"
+  elif [ -L "$alias_path" ]; then
+    alias_target="$(readlink "$alias_path" 2>/dev/null || true)"
+    if [ "$alias_target" = "/usr/local/bin/warppool-node-uninstall" ] || [ "$alias_target" = "warppool-node-uninstall" ]; then
+      run rm -f "$alias_path"
+    else
+      log "skip alias removal, points outside WarpPool: $alias_path -> $alias_target"
+    fi
+  elif [ -e "$alias_path" ]; then
+    log "skip alias removal, not a symlink: $alias_path"
+  fi
   run rm -f /usr/local/bin/warppool-node-uninstall
   run rm -rf /var/lib/warppool/warp-forward
   run rmdir /var/lib/warppool >/dev/null 2>&1 || true

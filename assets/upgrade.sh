@@ -525,6 +525,25 @@ install_new_version() {
   log "installed assets: $LIB_DIR/assets"
 }
 
+refresh_command_aliases() {
+  local target alias_path
+  target="$INSTALL_DIR/warppool"
+  alias_path="$INSTALL_DIR/wpl"
+
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: refresh command alias $alias_path -> $target"
+    return 0
+  fi
+
+  if [ -e "$alias_path" ] && [ ! -L "$alias_path" ]; then
+    log "warning: command alias $alias_path already exists and is not a symlink; keeping existing file"
+    return 0
+  fi
+
+  ln -sf "$target" "$alias_path"
+  log "installed command alias: $alias_path -> $target"
+}
+
 service_exists() {
   command -v systemctl >/dev/null 2>&1 || return 1
   systemctl list-unit-files "$1" >/dev/null 2>&1 || systemctl status "$1" >/dev/null 2>&1
@@ -641,6 +660,7 @@ main() {
   backup_existing
   download_and_verify
   install_new_version
+  refresh_command_aliases
   write_version_marker
   refresh_singbox
   refresh_systemd_units

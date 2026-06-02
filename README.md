@@ -152,6 +152,8 @@ The installer will:
 
 The selected language is saved to the WarpPool config. Later interactive commands such as `warppool deploy`, `warppool deploy-token`, and `warppool uninstall` use the same language.
 
+After installation, `wpl` is also available as a short alias for `warppool`, for example `wpl node list` and `wpl ping nat01`. If `/usr/local/bin/wpl` is already occupied by another program, the installer keeps the existing file and only installs `warppool`.
+
 Non-interactive installation:
 
 ```bash
@@ -354,6 +356,15 @@ warppool remove nat01 # Remove node nat01 record only
 warppool node remove nat01 --clean-wg # Remove node nat01 and delete local WG client config
 ```
 
+Short alias examples:
+
+```bash
+wpl node list
+wpl node show nat01
+wpl ping nat01
+wpl upgrade --yes
+```
+
 `remove` only removes the node record. Add `--clean-wg` when you also want to stop and delete the local WireGuard client config on the main server.
 
 `warppool node mode` defaults to Pull mode and prints a command to run on the exit node. The exit node detects WARP automatically: reuse it when already installed, otherwise install it. Advanced options:
@@ -400,7 +411,7 @@ warppool export clash -o clash.yaml # Export Clash-compatible config
 ```bash
 warppool version # Show version information
 warppool doctor # Check local runtime and port status
-warppool ping nat01 # Test node public endpoint latency, direct HTTP latency, and proxy egress IP/latency
+warppool ping nat01 # Test node latency target, direct HTTP latency, and proxy egress IP/latency
 warppool upgrade --yes # Upgrade binary and bundled installer assets
 warppool speedtest --proxy http://127.0.0.1:10133 # Run a simple speed test through a proxy
 ```
@@ -443,16 +454,22 @@ Push deployment installs a helper command on the exit node:
 warppool-node-uninstall
 ```
 
+It also installs a shorter alias when not occupied by another command:
+
+```bash
+wpl-node-uninstall
+```
+
 Common usage on the exit node:
 
 ```bash
-warppool-node-uninstall device=wpnat01 # Remove one WarpPool WireGuard device
-warppool-node-uninstall all=true # Remove all WarpPool WireGuard devices on this node
-warppool-node-uninstall all=true remove_warp=true # Also remove/clean WARP runtime
-warppool-node-uninstall all=true remove_wireguard=true # Also remove WireGuard packages
+wpl-node-uninstall device=wpnat01 # Remove one WarpPool WireGuard device
+wpl-node-uninstall all=true # Remove all WarpPool WireGuard devices on this node
+wpl-node-uninstall all=true remove_warp=true # Also remove/clean WARP runtime
+wpl-node-uninstall all=true remove_wireguard=true # Also remove WireGuard packages
 ```
 
-If exactly one `/etc/wireguard/wp*.conf` file exists, `warppool-node-uninstall` can run without arguments. If multiple WarpPool devices exist, pass `device=<wg-device>` or `all=true`.
+If exactly one `/etc/wireguard/wp*.conf` file exists, `wpl-node-uninstall` can run without arguments. If multiple WarpPool devices exist, pass `device=<wg-device>` or `all=true`. The long command `warppool-node-uninstall` remains available for compatibility.
 
 For Pull-only nodes where the helper was not installed, run:
 

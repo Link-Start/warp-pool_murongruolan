@@ -14,7 +14,7 @@
 - Fixed WARP installation after lightweight dependency changes by installing `gpg` only when WARP mode needs the Cloudflare apt repository.
 - Relaxed WARP disk preflight for small NAT VPS nodes: low disk space now shows a warning when it is above the hard minimum instead of blocking too early.
 - `warppool node mode --method ssh` now reuses saved non-sensitive SSH defaults from Push deployment. SSH passwords are never saved.
-- `warppool ping` now reports node public endpoint latency, main-server direct HTTP latency, proxy egress IP, and proxy HTTP latency, with multiple fallback check URLs.
+- `warppool ping` now reports node latency target RTT, main-server direct HTTP latency, proxy egress IP, and proxy HTTP latency, with multiple fallback check URLs.
 
 ## v0.1.5
 

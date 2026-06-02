@@ -27,6 +27,7 @@ func TestUninstallAllCanCleanWGAndProxy(t *testing.T) {
 	stateDir := filepath.Join(dir, "state")
 	installDir := filepath.Join(dir, "install")
 	binaryPath := filepath.Join(dir, "warppool")
+	aliasPath := filepath.Join(dir, "wpl")
 	if err := os.WriteFile(wgPath, []byte("wg"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -36,6 +37,9 @@ func TestUninstallAllCanCleanWGAndProxy(t *testing.T) {
 		}
 	}
 	if err := os.WriteFile(binaryPath, []byte("bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(aliasPath, []byte("alias"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -59,6 +63,7 @@ func TestUninstallAllCanCleanWGAndProxy(t *testing.T) {
 		StateDir:      stateDir,
 		InstallDir:    installDir,
 		BinaryPath:    binaryPath,
+		AliasPath:     aliasPath,
 		RuntimeOS:     "test",
 		Runner:        runner,
 		CleanWG:       true,
@@ -78,6 +83,9 @@ func TestUninstallAllCanCleanWGAndProxy(t *testing.T) {
 	}
 	if _, err := os.Stat(binaryPath); !os.IsNotExist(err) {
 		t.Fatalf("expected binary removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(aliasPath); err != nil {
+		t.Fatalf("expected non-symlink alias preserved, stat err=%v", err)
 	}
 }
 
@@ -166,4 +174,17 @@ func hasUninstallLog(logs []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestAliasTargetAllowedOnlyAllowsWarpPoolTargets(t *testing.T) {
+	aliasPath := "/usr/local/bin/wpl"
+	if !aliasTargetAllowed(aliasPath, "/usr/local/bin/warppool", []string{"/usr/local/bin/warppool"}) {
+		t.Fatal("expected primary warppool target allowed")
+	}
+	if !aliasTargetAllowed(aliasPath, "warppool", []string{"/usr/local/bin/warppool"}) {
+		t.Fatal("expected relative warppool target allowed")
+	}
+	if aliasTargetAllowed(aliasPath, "/usr/bin/other-wpl", []string{"/usr/local/bin/warppool"}) {
+		t.Fatal("expected unrelated target rejected")
+	}
 }

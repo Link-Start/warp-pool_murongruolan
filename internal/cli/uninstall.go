@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -26,6 +27,7 @@ type uninstallOptions struct {
 	CleanWGSet      bool
 	CleanProxySet   bool
 	BinaryPath      string
+	AliasPath       string
 	ConfigPath      string
 	StateDir        string
 	InstallDir      string
@@ -37,6 +39,8 @@ type uninstallOptions struct {
 	RemoveFile      func(string) error
 	RemoveAll       func(string) error
 	Stat            func(string) (fs.FileInfo, error)
+	Lstat           func(string) (fs.FileInfo, error)
+	Readlink        func(string) (string, error)
 	Executable      func() (string, error)
 	Out             func(string)
 	Prompt          promptIO
@@ -192,7 +196,16 @@ func uninstallAll(opts uninstallOptions) (uninstallResult, error) {
 		}
 	}
 	if !opts.KeepBinary {
+		primaryBinaryPath := defaultUninstallBinaryPath(opts.RuntimeOS)
+		if opts.BinaryPath != primaryBinaryPath {
+			if err := removePath(opts, primaryBinaryPath, &result, false); err != nil {
+				return result, err
+			}
+		}
 		if err := removePath(opts, opts.BinaryPath, &result, false); err != nil {
+			return result, err
+		}
+		if err := removeAliasPath(opts, &result, opts.AliasPath, []string{primaryBinaryPath, opts.BinaryPath}); err != nil {
 			return result, err
 		}
 	}
@@ -263,6 +276,75 @@ func removePath(opts uninstallOptions, path string, result *uninstallResult, rec
 	return nil
 }
 
+func removeAliasPath(opts uninstallOptions, result *uninstallResult, aliasPath string, allowedTargets []string) error {
+	if strings.TrimSpace(aliasPath) == "" {
+		return nil
+	}
+	if opts.DryRun {
+		result.append("dry-run: remove alias if it points to WarpPool: " + aliasPath)
+		return nil
+	}
+	info, err := opts.Lstat(aliasPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			result.append("not found: " + aliasPath)
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		result.append("skip alias removal, not a symlink: " + aliasPath)
+		return nil
+	}
+	target, err := opts.Readlink(aliasPath)
+	if err != nil {
+		return fmt.Errorf("readlink %s: %w", aliasPath, err)
+	}
+	if !aliasTargetAllowed(aliasPath, target, allowedTargets) {
+		result.append("skip alias removal, points outside WarpPool: " + aliasPath + " -> " + target)
+		return nil
+	}
+	if err := opts.RemoveFile(aliasPath); err != nil {
+		return fmt.Errorf("remove %s: %w", aliasPath, err)
+	}
+	result.append("removed alias: " + aliasPath)
+	return nil
+}
+
+func aliasTargetAllowed(aliasPath string, target string, allowedTargets []string) bool {
+	normalizedTarget := normalizeAliasTarget(aliasPath, target)
+	if normalizedTarget == "" {
+		return false
+	}
+	for _, allowed := range allowedTargets {
+		normalizedAllowed := normalizeAliasTarget(aliasPath, allowed)
+		if normalizedAllowed == "" {
+			continue
+		}
+		if normalizedTarget == normalizedAllowed {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeAliasTarget(aliasPath string, value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "/") {
+		return path.Clean(value)
+	}
+	if filepath.IsAbs(value) {
+		return filepath.Clean(value)
+	}
+	if strings.HasPrefix(aliasPath, "/") {
+		return path.Clean(path.Join(path.Dir(aliasPath), value))
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(aliasPath), value))
+}
+
 func uninstallDefaults(opts uninstallOptions) uninstallOptions {
 	if opts.RuntimeOS == "" {
 		opts.RuntimeOS = runtime.GOOS
@@ -278,6 +360,12 @@ func uninstallDefaults(opts uninstallOptions) uninstallOptions {
 	}
 	if opts.Stat == nil {
 		opts.Stat = os.Stat
+	}
+	if opts.Lstat == nil {
+		opts.Lstat = os.Lstat
+	}
+	if opts.Readlink == nil {
+		opts.Readlink = os.Readlink
 	}
 	if opts.Executable == nil {
 		opts.Executable = os.Executable
@@ -317,8 +405,32 @@ func uninstallDefaults(opts uninstallOptions) uninstallOptions {
 		if exe, err := opts.Executable(); err == nil {
 			opts.BinaryPath = exe
 		}
+		if opts.BinaryPath == "" {
+			opts.BinaryPath = defaultUninstallBinaryPath(opts.RuntimeOS)
+		}
+	}
+	if opts.AliasPath == "" {
+		opts.AliasPath = defaultUninstallAliasPath(opts.RuntimeOS)
 	}
 	return opts
+}
+
+func defaultUninstallBinaryPath(runtimeOS string) string {
+	if runtimeOS == "windows" {
+		base := os.Getenv("ProgramFiles")
+		if base == "" {
+			base = "."
+		}
+		return filepath.Join(base, "WarpPool", "warppool.exe")
+	}
+	return "/usr/local/bin/warppool"
+}
+
+func defaultUninstallAliasPath(runtimeOS string) string {
+	if runtimeOS == "windows" {
+		return ""
+	}
+	return "/usr/local/bin/wpl"
 }
 
 func defaultUninstallStateDir(runtimeOS string) string {

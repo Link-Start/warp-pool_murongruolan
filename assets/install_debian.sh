@@ -122,6 +122,16 @@ install_node_uninstaller() {
   run cp "$script" /usr/local/bin/warppool-node-uninstall
   run chmod 0755 /usr/local/bin/warppool-node-uninstall
   log "installed node uninstaller: /usr/local/bin/warppool-node-uninstall"
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: create node uninstall alias /usr/local/bin/wpl-node-uninstall -> /usr/local/bin/warppool-node-uninstall"
+    return 0
+  fi
+  if [ -e /usr/local/bin/wpl-node-uninstall ] && [ ! -L /usr/local/bin/wpl-node-uninstall ]; then
+    log "warning: node uninstall alias already exists and is not a symlink: /usr/local/bin/wpl-node-uninstall"
+    return 0
+  fi
+  run ln -sf /usr/local/bin/warppool-node-uninstall /usr/local/bin/wpl-node-uninstall
+  log "installed node uninstall alias: /usr/local/bin/wpl-node-uninstall"
 }
 
 maybe_install_warp() {
