@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added `dual` deployment mode: one exit node can expose both direct and WARP local proxy ports.
+- `warppool deploy` and `warppool deploy-token` can select `dual/direct+warp` and validate both local ports.
+- `warppool ping` checks both direct and WARP proxy ports for dual nodes.
+- Clash export emits separate direct and WARP proxy entries for dual nodes.
+
 ## v0.1.10
 
 - Added the short command alias `wpl`, equivalent to `warppool`, for example `wpl node list` and `wpl ping nat01`.

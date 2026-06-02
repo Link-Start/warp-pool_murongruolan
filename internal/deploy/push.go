@@ -86,6 +86,11 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 		if err := config.CheckPortAvailable(opts.Node.BindHost, opts.Node.LocalPort); err != nil {
 			return cfg, PushResult{}, err
 		}
+		if opts.Node.ExitMode == config.ExitModeDual {
+			if err := config.CheckPortAvailable(opts.Node.BindHost, opts.Node.WarpLocalPort); err != nil {
+				return cfg, PushResult{}, fmt.Errorf("warp local port: %w", err)
+			}
+		}
 	}
 
 	result := PushResult{Node: opts.Node}
@@ -94,7 +99,7 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 		Endpoint:         opts.WGEndpoint,
 		EndpointPort:     opts.WGEndpointPort,
 		ListenPort:       opts.WGListenPort,
-		EnableForwarding: opts.Node.ExitMode == config.ExitModeDirect && !opts.SkipForwarding,
+		EnableForwarding: (opts.Node.ExitMode == config.ExitModeDirect || opts.Node.ExitMode == config.ExitModeDual) && !opts.SkipForwarding,
 	}
 
 	if opts.DryRun {
@@ -115,7 +120,7 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 		if wgOptions.EnableForwarding {
 			result.Logs = append(result.Logs, "dry-run: enable IPv4 forwarding and direct MASQUERADE")
 		}
-		if opts.Node.ExitMode == config.ExitModeWarp {
+		if opts.Node.ExitMode == config.ExitModeWarp || opts.Node.ExitMode == config.ExitModeDual {
 			result.Logs = append(result.Logs, fmt.Sprintf("dry-run: enable WARP forwarding for %s", wgPlan.Device))
 		}
 		return cfg, result, nil
@@ -187,7 +192,7 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	if err := configureRemoteWireGuard(runner, wgPlan, opts.RemoteDir, opts.SkipWGUp, &result); err != nil {
 		return cfg, result, err
 	}
-	if opts.Node.ExitMode == config.ExitModeWarp && !opts.SkipWGUp {
+	if (opts.Node.ExitMode == config.ExitModeWarp || opts.Node.ExitMode == config.ExitModeDual) && !opts.SkipWGUp {
 		reportProgress(opts.Progress, "configure_warp")
 		if err := configureRemoteWarpForwarding(runner, wgPlan, opts.RemoteDir, opts.WarpPort, &result); err != nil {
 			return cfg, result, err
@@ -271,7 +276,11 @@ func configureRemoteWarpForwarding(runner RemoteRunner, plan wireguard.Plan, rem
 	if warpPort == 0 {
 		warpPort = 14000
 	}
-	command := warpForwardCommand(plan, remoteDir, warpPort)
+	clientAddr := plan.ClientAddress
+	if plan.DualMode && plan.WarpClientAddress != "" {
+		clientAddr = plan.WarpClientAddress
+	}
+	command := warpForwardCommandForClient(plan, remoteDir, warpPort, clientAddr)
 	remoteResult, err := runner.Run(command)
 	if remoteResult.Stdout != "" {
 		result.Logs = append(result.Logs, remoteResult.Stdout)
@@ -412,6 +421,10 @@ func nodeModeSSHCommand(opts ModeSwitchOptions) string {
 }
 
 func warpForwardCommand(plan wireguard.Plan, remoteDir string, warpPort int) string {
+	return warpForwardCommandForClient(plan, remoteDir, warpPort, plan.ClientAddress)
+}
+
+func warpForwardCommandForClient(plan wireguard.Plan, remoteDir string, warpPort int, clientAddress string) string {
 	scriptPath := filepath.ToSlash(filepath.Join(remoteDir, "warp_forward.sh"))
 	return fmt.Sprintf(
 		"if [ -x %s ]; then bash %s %s %s %s %s %s; else echo '[WarpPool][warp-forward][ERROR] warp_forward.sh not found in deploy assets' >&2; exit 1; fi",
@@ -419,7 +432,7 @@ func warpForwardCommand(plan wireguard.Plan, remoteDir string, warpPort int) str
 		shellPath(scriptPath),
 		shellPath("action=up"),
 		shellPath("device="+plan.Device),
-		shellPath("client_addr="+plan.ClientAddress),
+		shellPath("client_addr="+clientAddress),
 		shellPath("server_addr="+plan.ServerAddress),
 		shellPath(fmt.Sprintf("transparent_port=%d", warpPort)),
 	)

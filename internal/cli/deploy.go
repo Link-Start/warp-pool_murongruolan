@@ -107,10 +107,11 @@ func newDeployCommand() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&opts.Node.Name, "name", "", "node name")
-	cmd.Flags().StringVar(&opts.Node.ExitMode, "exit-mode", "", "exit mode: direct or warp")
+	cmd.Flags().StringVar(&opts.Node.ExitMode, "exit-mode", "", "exit mode: direct, warp, or dual")
 	cmd.Flags().StringVar(&opts.Node.Proxy, "proxy", "", "local proxy protocol: socks5, http, or mixed")
 	cmd.Flags().StringVar(&opts.Node.BindHost, "bind-host", "127.0.0.1", "local proxy bind host")
 	cmd.Flags().IntVar(&opts.Node.LocalPort, "port", 0, "local proxy port")
+	cmd.Flags().IntVar(&opts.Node.WarpLocalPort, "warp-port", 0, "local proxy port for WARP in dual mode")
 	cmd.Flags().StringVar(&opts.Node.Country, "country", "", "node country or region")
 	cmd.Flags().StringVar(&opts.Node.PublicIP, "public-ip", "", "node public IP")
 	cmd.Flags().StringVar(&opts.SSH.Host, "ssh-host", "", "SSH host")
@@ -170,6 +171,7 @@ func promptDeployOptions(prompt promptIO, cfg config.Config, opts *deploy.PushOp
 	opts.Node.ExitMode, err = prompt.askMenu(tr(language, "Exit mode", "出口模式"), opts.Node.ExitMode, defaultString(cfg.Defaults.ExitMode, config.ExitModeDirect), []menuOption{
 		{Label: "direct", Value: config.ExitModeDirect},
 		{Label: "warp", Value: config.ExitModeWarp},
+		{Label: "dual/direct+warp", Value: config.ExitModeDual},
 	})
 	if err != nil {
 		return err
@@ -186,9 +188,19 @@ func promptDeployOptions(prompt promptIO, cfg config.Config, opts *deploy.PushOp
 	if bindHost == "" {
 		bindHost = cfg.Defaults.BindHost
 	}
-	opts.Node.LocalPort, err = promptAvailableLocalPort(prompt, cfg, bindHost, opts.Node.LocalPort)
+	portLabel := tr(language, "Local proxy port", "本地代理端口")
+	if opts.Node.ExitMode == config.ExitModeDual {
+		portLabel = tr(language, "Direct local proxy port", "直连本地代理端口")
+	}
+	opts.Node.LocalPort, err = promptAvailableLocalPortWithLabel(prompt, cfg, bindHost, opts.Node.LocalPort, portLabel, 0)
 	if err != nil {
 		return err
+	}
+	if opts.Node.ExitMode == config.ExitModeDual {
+		opts.Node.WarpLocalPort, err = promptAvailableLocalPortWithLabel(prompt, cfg, bindHost, opts.Node.WarpLocalPort, tr(language, "WARP local proxy port", "WARP 本地代理端口"), opts.Node.LocalPort)
+		if err != nil {
+			return err
+		}
 	}
 	opts.SSH.Host, err = prompt.askRequired(tr(language, "SSH host/IP", "SSH 主机/IP"), opts.SSH.Host)
 	if err != nil {
@@ -225,10 +237,22 @@ func defaultString(value string, fallback string) string {
 }
 
 func promptAvailableLocalPort(prompt promptIO, cfg config.Config, bindHost string, current int) (int, error) {
+	return promptAvailableLocalPortWithLabel(prompt, cfg, bindHost, current, tr(prompt.language, "Local proxy port", "本地代理端口"), 0)
+}
+
+func promptAvailableLocalPortWithLabel(prompt promptIO, cfg config.Config, bindHost string, current int, label string, disallow int) (int, error) {
 	for {
-		port, err := prompt.askRequiredInt(tr(prompt.language, "Local proxy port", "本地代理端口"), current)
+		port, err := prompt.askRequiredInt(label, current)
 		if err != nil {
 			return 0, err
+		}
+		if disallow != 0 && port == disallow {
+			err := fmt.Errorf("local proxy ports must be different: %d", port)
+			if current != 0 {
+				return 0, err
+			}
+			fmt.Fprintf(prompt.out, "%v\n", err)
+			continue
 		}
 		if err := validateLocalProxyPort(cfg, bindHost, port); err != nil {
 			if current != 0 {
@@ -249,12 +273,18 @@ func validateLocalProxyPort(cfg config.Config, bindHost string, port int) error 
 		if node.BindHost == bindHost && node.LocalPort == port {
 			return fmt.Errorf("local proxy port already used by node %s: %s:%d", node.Name, bindHost, port)
 		}
+		if node.BindHost == bindHost && node.ExitMode == config.ExitModeDual && node.WarpLocalPort == port {
+			return fmt.Errorf("local proxy port already used by node %s: %s:%d", node.Name, bindHost, port)
+		}
 	}
 	for _, token := range cfg.Tokens {
 		if token.Used || deployTokenStatus(token, time.Now().UTC()) == "expired" {
 			continue
 		}
 		if token.Node.BindHost == bindHost && token.Node.LocalPort == port {
+			return fmt.Errorf("unused deploy token already reserves local port for node %s: %s:%d", token.Node.Name, bindHost, port)
+		}
+		if token.Node.BindHost == bindHost && token.Node.ExitMode == config.ExitModeDual && token.Node.WarpLocalPort == port {
 			return fmt.Errorf("unused deploy token already reserves local port for node %s: %s:%d", token.Node.Name, bindHost, port)
 		}
 	}

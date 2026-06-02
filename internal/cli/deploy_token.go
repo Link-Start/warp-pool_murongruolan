@@ -143,10 +143,11 @@ func newDeployTokenCreateCommandWithHooks(checkPort func(string, int) error, che
 	}
 
 	cmd.Flags().StringVar(&node.Name, "name", "", "node name")
-	cmd.Flags().StringVar(&node.ExitMode, "exit-mode", "", "exit mode: direct or warp")
+	cmd.Flags().StringVar(&node.ExitMode, "exit-mode", "", "exit mode: direct, warp, or dual")
 	cmd.Flags().StringVar(&node.Proxy, "proxy", "", "local proxy protocol: socks5, http, or mixed")
 	cmd.Flags().StringVar(&node.BindHost, "bind-host", "127.0.0.1", "local proxy bind host")
 	cmd.Flags().IntVar(&node.LocalPort, "port", 0, "local proxy port")
+	cmd.Flags().IntVar(&node.WarpLocalPort, "warp-port", 0, "local proxy port for WARP in dual mode")
 	cmd.Flags().StringVar(&node.Country, "country", "", "node country or region")
 	cmd.Flags().StringVar(&node.PublicIP, "public-ip", "", "node public IP")
 	cmd.Flags().DurationVar(&ttl, "ttl", config.DefaultDeployTokenTTL, "token TTL")
@@ -248,12 +249,12 @@ func newDeployTokenListCommand() *cobra.Command {
 				return fmt.Errorf("load config: %w", err)
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NODE\tPORT\tMODE\tSTATUS\tEXPIRES_AT\tTOKEN")
+			fmt.Fprintln(w, "NODE\tLISTEN\tMODE\tSTATUS\tEXPIRES_AT\tTOKEN")
 			now := time.Now().UTC()
 			for _, item := range cfg.Tokens {
-				fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\t%s\n",
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 					item.Node.Name,
-					item.Node.LocalPort,
+					nodeListenSummary(item.Node),
 					item.Node.ExitMode,
 					deployTokenStatus(item, now),
 					item.ExpiresAt,
@@ -376,6 +377,7 @@ func promptDeployTokenOptions(prompt promptIO, cfg config.Config, node *config.N
 	node.ExitMode, err = prompt.askMenu(tr(language, "Exit mode", "出口模式"), node.ExitMode, defaultString(cfg.Defaults.ExitMode, config.ExitModeDirect), []menuOption{
 		{Label: "direct", Value: config.ExitModeDirect},
 		{Label: "warp", Value: config.ExitModeWarp},
+		{Label: "dual/direct+warp", Value: config.ExitModeDual},
 	})
 	if err != nil {
 		return err
@@ -392,7 +394,17 @@ func promptDeployTokenOptions(prompt promptIO, cfg config.Config, node *config.N
 	if bindHost == "" {
 		bindHost = cfg.Defaults.BindHost
 	}
-	node.LocalPort, err = promptAvailableLocalPort(prompt, cfg, bindHost, node.LocalPort)
+	portLabel := tr(language, "Local proxy port", "本地代理端口")
+	if node.ExitMode == config.ExitModeDual {
+		portLabel = tr(language, "Direct local proxy port", "直连本地代理端口")
+	}
+	node.LocalPort, err = promptAvailableLocalPortWithLabel(prompt, cfg, bindHost, node.LocalPort, portLabel, 0)
+	if err != nil {
+		return err
+	}
+	if node.ExitMode == config.ExitModeDual {
+		node.WarpLocalPort, err = promptAvailableLocalPortWithLabel(prompt, cfg, bindHost, node.WarpLocalPort, tr(language, "WARP local proxy port", "WARP 本地代理端口"), node.LocalPort)
+	}
 	return err
 }
 

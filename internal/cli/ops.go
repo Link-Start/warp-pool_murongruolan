@@ -115,24 +115,34 @@ func newPingCommandWithChecks(httpCheck func(string, string, time.Duration) (str
 					continue
 				}
 
-				proxyURL := nodeProxyURL(node)
-				if proxyURL == "" {
+				proxyChecks := nodeProxyChecks(node)
+				if len(proxyChecks) == 0 {
 					fmt.Fprintln(cmd.OutOrStdout(), tr(language, "proxy check skipped: missing local proxy address", "代理检测已跳过：缺少本地代理地址"))
 					continue
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(language, "check mode:", "检测模式："), fmt.Sprintf("%s (%s)", tr(language, "sing-box embedded WireGuard proxy check", "sing-box 内置 WireGuard 代理检测"), proxyURL))
-				body, usedURL, elapsed, err := fetchTextWithFallback(checkURLs, proxyURL, timeout, httpCheck)
-				if err != nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "%s %v\n", tr(language, "proxy check failed:", "代理检测失败："), err)
-					continue
+				for _, item := range proxyChecks {
+					label := item.Label
+					if config.NormalizeLanguage(language) == "zh" {
+						label = item.LabelZH
+					}
+					modeText := fmt.Sprintf("%s (%s)", tr(language, "sing-box embedded WireGuard proxy check", "sing-box 内置 WireGuard 代理检测"), item.URL)
+					if node.ExitMode == config.ExitModeDual {
+						modeText = fmt.Sprintf("%s %s", label, modeText)
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(language, "check mode:", "检测模式："), modeText)
+					body, usedURL, elapsed, err := fetchTextWithFallback(checkURLs, item.URL, timeout, httpCheck)
+					if err != nil {
+						fmt.Fprintf(cmd.OutOrStdout(), "%s %v\n", tr(language, "proxy check failed:", "代理检测失败："), err)
+						continue
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(language, "proxy check url:", "代理检测地址："), usedURL)
+					fmt.Fprintf(cmd.OutOrStdout(), "%s %s (%s %s)\n",
+						tr(language, "proxy check ok:", "代理检测通过："),
+						strings.TrimSpace(body),
+						tr(language, "latency:", "延迟："),
+						formatDuration(elapsed),
+					)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(language, "proxy check url:", "代理检测地址："), usedURL)
-				fmt.Fprintf(cmd.OutOrStdout(), "%s %s (%s %s)\n",
-					tr(language, "proxy check ok:", "代理检测通过："),
-					strings.TrimSpace(body),
-					tr(language, "latency:", "延迟："),
-					formatDuration(elapsed),
-				)
 			}
 			return nil
 		},
@@ -320,6 +330,12 @@ func redactNode(node config.Node) config.Node {
 	if node.WGClientConfig != "" {
 		node.WGClientConfig = redactWireGuardConfig(node.WGClientConfig)
 	}
+	if node.WGWarpClientPrivateKey != "" {
+		node.WGWarpClientPrivateKey = "<redacted>"
+	}
+	if node.WGWarpClientConfig != "" {
+		node.WGWarpClientConfig = redactWireGuardConfig(node.WGWarpClientConfig)
+	}
 	return node
 }
 
@@ -488,16 +504,22 @@ func BuildDoctorChecks(cfg config.Config, cfgPath string) []DoctorCheck {
 	proxyRunning := proxyErr == nil && proxyStatus.Running
 
 	for _, node := range cfg.Nodes {
-		_, err := net.Listen("tcp", net.JoinHostPort(node.BindHost, fmt.Sprintf("%d", node.LocalPort)))
-		if err != nil {
-			if proxyRunning {
-				checks = append(checks, DoctorCheck{Name: "port " + node.Name, OK: true, Detail: fmt.Sprintf("%s:%d in use by local proxy", node.BindHost, node.LocalPort)})
+		for _, portCheck := range nodeDoctorPorts(node) {
+			name := "port " + node.Name
+			if portCheck.Label != "" {
+				name += " " + portCheck.Label
+			}
+			_, err := net.Listen("tcp", net.JoinHostPort(node.BindHost, fmt.Sprintf("%d", portCheck.Port)))
+			if err != nil {
+				if proxyRunning {
+					checks = append(checks, DoctorCheck{Name: name, OK: true, Detail: fmt.Sprintf("%s:%d in use by local proxy", node.BindHost, portCheck.Port)})
+					continue
+				}
+				checks = append(checks, DoctorCheck{Name: name, OK: false, Detail: err.Error()})
 				continue
 			}
-			checks = append(checks, DoctorCheck{Name: "port " + node.Name, OK: false, Detail: err.Error()})
-			continue
+			checks = append(checks, DoctorCheck{Name: name, OK: true, Detail: fmt.Sprintf("%s:%d", node.BindHost, portCheck.Port)})
 		}
-		checks = append(checks, DoctorCheck{Name: "port " + node.Name, OK: true, Detail: fmt.Sprintf("%s:%d", node.BindHost, node.LocalPort)})
 	}
 
 	if proxyErr != nil {
@@ -550,7 +572,36 @@ func runPing(target string, count int, timeout time.Duration) (string, error) {
 }
 
 func nodeProxyURL(node config.Node) string {
-	if strings.TrimSpace(node.BindHost) == "" || node.LocalPort == 0 {
+	return nodeProxyURLForPort(node, node.LocalPort)
+}
+
+type proxyCheckTarget struct {
+	Label   string
+	LabelZH string
+	URL     string
+}
+
+func nodeProxyChecks(node config.Node) []proxyCheckTarget {
+	var checks []proxyCheckTarget
+	if node.ExitMode == config.ExitModeDual {
+		checks = []proxyCheckTarget{
+			{Label: "direct", LabelZH: "直连", URL: nodeProxyURLForPort(node, node.LocalPort)},
+			{Label: "warp", LabelZH: "WARP", URL: nodeProxyURLForPort(node, node.WarpLocalPort)},
+		}
+	} else {
+		checks = []proxyCheckTarget{{Label: node.ExitMode, LabelZH: node.ExitMode, URL: nodeProxyURL(node)}}
+	}
+	out := checks[:0]
+	for _, item := range checks {
+		if strings.TrimSpace(item.URL) != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func nodeProxyURLForPort(node config.Node, port int) string {
+	if strings.TrimSpace(node.BindHost) == "" || port == 0 {
 		return ""
 	}
 	host := node.BindHost
@@ -561,7 +612,19 @@ func nodeProxyURL(node config.Node) string {
 	if node.Proxy == config.ProxyHTTP {
 		scheme = "http"
 	}
-	return fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(host, fmt.Sprintf("%d", node.LocalPort)))
+	return fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(host, fmt.Sprintf("%d", port)))
+}
+
+type nodeDoctorPort struct {
+	Label string
+	Port  int
+}
+
+func nodeDoctorPorts(node config.Node) []nodeDoctorPort {
+	if node.ExitMode == config.ExitModeDual {
+		return []nodeDoctorPort{{Label: "direct", Port: node.LocalPort}, {Label: "warp", Port: node.WarpLocalPort}}
+	}
+	return []nodeDoctorPort{{Port: node.LocalPort}}
 }
 
 func fetchText(rawURL string, proxyURL string, timeout time.Duration) (string, error) {

@@ -58,6 +58,36 @@ func TestClashAllowsHTTPOverride(t *testing.T) {
 	}
 }
 
+func TestClashExportsDualNodeAsTwoProxies(t *testing.T) {
+	cfg := config.Default()
+	cfg.Nodes = []config.Node{
+		{
+			Name:          "nat1",
+			ExitMode:      config.ExitModeDual,
+			Proxy:         config.ProxyMixed,
+			BindHost:      "127.0.0.1",
+			LocalPort:     10013,
+			WarpLocalPort: 10014,
+			Country:       "US",
+		},
+	}
+
+	out, err := Clash(cfg, ClashOptions{})
+	if err != nil {
+		t.Fatalf("export clash: %v", err)
+	}
+	for _, want := range []string{
+		`name: "WarpPool-US-nat1-direct"`,
+		"port: 10013",
+		`name: "WARP-US-nat1"`,
+		"port: 10014",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
 func TestClashRejectsInvalidOverride(t *testing.T) {
 	cfg := config.Default()
 	_, err := Clash(cfg, ClashOptions{ProxyType: config.ProxyMixed})

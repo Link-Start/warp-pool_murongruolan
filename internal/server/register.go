@@ -165,7 +165,7 @@ func RegisterHandler(configPath string) http.Handler {
 			Endpoint:         req.Endpoint,
 			EndpointPort:     endpointPort,
 			ListenPort:       listenPort,
-			EnableForwarding: node.ExitMode == config.ExitModeDirect,
+			EnableForwarding: node.ExitMode == config.ExitModeDirect || node.ExitMode == config.ExitModeDual,
 			ServerPrivateKey: req.ServerPrivateKey,
 			ServerPublicKey:  req.ServerPublicKey,
 		})
@@ -411,6 +411,7 @@ func writePrepareShell(w http.ResponseWriter, status int, value PrepareResponse)
 	fmt.Fprintf(w, "WG_DEVICE_B64=%s\n", shellB64(value.Node.WGDevice))
 	fmt.Fprintf(w, "WG_SERVER_ADDR_B64=%s\n", shellB64(value.Node.WGServerAddress))
 	fmt.Fprintf(w, "WG_CLIENT_ADDR_B64=%s\n", shellB64(value.Node.WGClientAddress))
+	fmt.Fprintf(w, "WG_WARP_CLIENT_ADDR_B64=%s\n", shellB64(value.Node.WGWarpClientAddress))
 	fmt.Fprintf(w, "NODE_EXIT_MODE_B64=%s\n", shellB64(value.Node.ExitMode))
 	fmt.Fprintf(w, "SERVER_CONFIG_B64=%s\n", shellB64(value.ServerConfig))
 }
@@ -433,6 +434,7 @@ func writeNodeModeShell(w http.ResponseWriter, status int, value NodeModeRespons
 	fmt.Fprintf(w, "WG_DEVICE_B64=%s\n", shellB64(value.Node.WGDevice))
 	fmt.Fprintf(w, "WG_SERVER_ADDR_B64=%s\n", shellB64(value.Node.WGServerAddress))
 	fmt.Fprintf(w, "WG_CLIENT_ADDR_B64=%s\n", shellB64(value.Node.WGClientAddress))
+	fmt.Fprintf(w, "WG_WARP_CLIENT_ADDR_B64=%s\n", shellB64(value.Node.WGWarpClientAddress))
 	fmt.Fprintf(w, "WARP_INSTALL_B64=%s\n", shellB64(value.WarpInstall))
 	fmt.Fprintf(w, "REMOVE_WARP=%s\n", removeWarp)
 }

@@ -12,33 +12,40 @@ import (
 const DefaultListenPort = 51820
 
 type Plan struct {
-	Device           string
-	ListenPort       int
-	Endpoint         string
-	EgressInterface  string
-	EnableForwarding bool
-	ServerAddress    string
-	ClientAddress    string
-	ServerPrivateKey string
-	ServerPublicKey  string
-	ClientPrivateKey string
-	ClientPublicKey  string
-	ServerConfig     string
-	ClientConfig     string
+	Device               string
+	ListenPort           int
+	Endpoint             string
+	EgressInterface      string
+	EnableForwarding     bool
+	DualMode             bool
+	ServerAddress        string
+	ClientAddress        string
+	WarpClientAddress    string
+	ServerPrivateKey     string
+	ServerPublicKey      string
+	ClientPrivateKey     string
+	ClientPublicKey      string
+	WarpClientPrivateKey string
+	WarpClientPublicKey  string
+	ServerConfig         string
+	ClientConfig         string
+	WarpClientConfig     string
 }
 
 type Options struct {
-	Node             config.Node
-	CIDR             string
-	Endpoint         string
-	EndpointPort     int
-	ListenPort       int
-	EgressInterface  string
-	EnableForwarding bool
-	ServerPrivateKey string
-	ServerPublicKey  string
-	ClientPrivateKey string
-	ClientPublicKey  string
+	Node                 config.Node
+	CIDR                 string
+	Endpoint             string
+	EndpointPort         int
+	ListenPort           int
+	EgressInterface      string
+	EnableForwarding     bool
+	ServerPrivateKey     string
+	ServerPublicKey      string
+	ClientPrivateKey     string
+	ClientPublicKey      string
+	WarpClientPrivateKey string
+	WarpClientPublicKey  string
 }
 
 func BuildPlan(cfg config.Config, opts Options) (Plan, error) {
@@ -79,28 +86,65 @@ func BuildPlan(cfg config.Config, opts Options) (Plan, error) {
 		}
 	}
 
-	serverIP, clientIP, err := AllocatePair(cfg, opts.CIDR)
-	if err != nil {
-		return Plan{}, err
+	dualMode := opts.Node.ExitMode == config.ExitModeDual
+	var warpClientKey KeyPair
+	if dualMode {
+		warpClientKey = KeyPair{
+			PrivateKey: opts.WarpClientPrivateKey,
+			PublicKey:  opts.WarpClientPublicKey,
+		}
+		if warpClientKey.PrivateKey == "" || warpClientKey.PublicKey == "" {
+			var err error
+			warpClientKey, err = GenerateKeyPair()
+			if err != nil {
+				return Plan{}, err
+			}
+		}
+	}
+
+	var serverIP, clientIP, warpClientIP string
+	var err error
+	if dualMode {
+		serverIP, clientIP, warpClientIP, err = AllocateTriple(cfg, opts.CIDR)
+		if err != nil {
+			return Plan{}, err
+		}
+	} else {
+		serverIP, clientIP, err = AllocatePair(cfg, opts.CIDR)
+		if err != nil {
+			return Plan{}, err
+		}
 	}
 
 	device := SafeDeviceName(opts.Node.Name)
 	plan := Plan{
-		Device:           device,
-		ListenPort:       opts.ListenPort,
-		Endpoint:         FormatEndpoint(opts.Endpoint, opts.EndpointPort),
-		EgressInterface:  opts.EgressInterface,
-		EnableForwarding: opts.EnableForwarding,
-		ServerAddress:    serverIP + "/30",
-		ClientAddress:    clientIP + "/30",
-		ServerPrivateKey: serverKey.PrivateKey,
-		ServerPublicKey:  serverKey.PublicKey,
-		ClientPrivateKey: clientKey.PrivateKey,
-		ClientPublicKey:  clientKey.PublicKey,
+		Device:               device,
+		ListenPort:           opts.ListenPort,
+		Endpoint:             FormatEndpoint(opts.Endpoint, opts.EndpointPort),
+		EgressInterface:      opts.EgressInterface,
+		EnableForwarding:     opts.EnableForwarding,
+		DualMode:             dualMode,
+		ServerPrivateKey:     serverKey.PrivateKey,
+		ServerPublicKey:      serverKey.PublicKey,
+		ClientPrivateKey:     clientKey.PrivateKey,
+		ClientPublicKey:      clientKey.PublicKey,
+		WarpClientPrivateKey: warpClientKey.PrivateKey,
+		WarpClientPublicKey:  warpClientKey.PublicKey,
+	}
+	if dualMode {
+		plan.ServerAddress = serverIP + "/29"
+		plan.ClientAddress = clientIP + "/32"
+		plan.WarpClientAddress = warpClientIP + "/32"
+	} else {
+		plan.ServerAddress = serverIP + "/30"
+		plan.ClientAddress = clientIP + "/30"
 	}
 
 	plan.ServerConfig = RenderServerConfig(plan)
 	plan.ClientConfig = RenderClientConfig(plan)
+	if dualMode {
+		plan.WarpClientConfig = RenderWarpClientConfig(plan)
+	}
 	return plan, nil
 }
 
@@ -126,17 +170,21 @@ func ApplyPlan(node config.Node, plan Plan) config.Node {
 	node.WGClientPublicKey = plan.ClientPublicKey
 	node.WGClientPrivateKey = plan.ClientPrivateKey
 	node.WGClientConfig = plan.ClientConfig
+	node.WGWarpClientAddress = plan.WarpClientAddress
+	node.WGWarpClientPublicKey = plan.WarpClientPublicKey
+	node.WGWarpClientPrivateKey = plan.WarpClientPrivateKey
+	node.WGWarpClientConfig = plan.WarpClientConfig
 	node.Endpoint = plan.Endpoint
 	return node
 }
 
 func RenderServerConfig(plan Plan) string {
-	clientIP := strings.TrimSuffix(plan.ClientAddress, "/30")
+	clientIP := addressIP(plan.ClientAddress)
 	var hooks string
 	if plan.EnableForwarding {
 		hooks = RenderDirectForwardingHooks(plan)
 	}
-	return fmt.Sprintf(`[Interface]
+	configText := fmt.Sprintf(`[Interface]
 PrivateKey = %s
 Address = %s
 ListenPort = %d
@@ -147,10 +195,27 @@ SaveConfig = false
 PublicKey = %s
 AllowedIPs = %s/32
 `, plan.ServerPrivateKey, plan.ServerAddress, plan.ListenPort, hooks, plan.ClientPublicKey, clientIP)
+	if plan.DualMode {
+		warpClientIP := addressIP(plan.WarpClientAddress)
+		configText += fmt.Sprintf(`
+[Peer]
+PublicKey = %s
+AllowedIPs = %s/32
+`, plan.WarpClientPublicKey, warpClientIP)
+	}
+	return configText
 }
 
 func RenderClientConfig(plan Plan) string {
-	serverIP := strings.TrimSuffix(plan.ServerAddress, "/30")
+	return renderClientConfig(plan.ClientPrivateKey, plan.ServerPublicKey, plan.Endpoint, plan.ClientAddress, plan.ServerAddress)
+}
+
+func RenderWarpClientConfig(plan Plan) string {
+	return renderClientConfig(plan.WarpClientPrivateKey, plan.ServerPublicKey, plan.Endpoint, plan.WarpClientAddress, plan.ServerAddress)
+}
+
+func renderClientConfig(privateKey string, serverPublicKey string, endpoint string, clientAddress string, serverAddress string) string {
+	serverIP := addressIP(serverAddress)
 	return fmt.Sprintf(`[Interface]
 PrivateKey = %s
 Address = %s
@@ -160,7 +225,7 @@ PublicKey = %s
 Endpoint = %s
 AllowedIPs = %s/32
 PersistentKeepalive = 25
-`, plan.ClientPrivateKey, plan.ClientAddress, plan.ServerPublicKey, plan.Endpoint, serverIP)
+`, privateKey, clientAddress, serverPublicKey, endpoint, serverIP)
 }
 
 func SafeDeviceName(name string) string {
@@ -240,13 +305,83 @@ func AllocatePair(cfg config.Config, cidr string) (string, string, error) {
 	return "", "", fmt.Errorf("no available wireguard address pair in %s", cidr)
 }
 
+func AllocateTriple(cfg config.Config, cidr string) (string, string, string, error) {
+	ip, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return "", "", "", fmt.Errorf("parse wireguard CIDR: %w", err)
+	}
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return "", "", "", fmt.Errorf("only IPv4 wireguard CIDR is supported: %s", cidr)
+	}
+
+	used := map[string]bool{}
+	for _, node := range cfg.Nodes {
+		markUsedAddresses(used, node)
+	}
+	for _, token := range cfg.Tokens {
+		if token.Used {
+			continue
+		}
+		markUsedAddresses(used, token.Node)
+	}
+
+	networkIP := ipNet.IP.To4()
+	if networkIP == nil {
+		return "", "", "", fmt.Errorf("only IPv4 wireguard CIDR is supported: %s", cidr)
+	}
+	base := uint32(networkIP[0])<<24 | uint32(networkIP[1])<<16 | uint32(networkIP[2])<<8 | uint32(networkIP[3])
+	for offset := uint32(0); offset < 1<<16; offset += 8 {
+		server := uint32ToIP(base + offset + 1)
+		client := uint32ToIP(base + offset + 2)
+		warpClient := uint32ToIP(base + offset + 3)
+		if !ipNet.Contains(net.ParseIP(server)) || !ipNet.Contains(net.ParseIP(client)) || !ipNet.Contains(net.ParseIP(warpClient)) {
+			break
+		}
+		if used[server] || used[client] || used[warpClient] {
+			continue
+		}
+		return server, client, warpClient, nil
+	}
+
+	return "", "", "", fmt.Errorf("no available dual wireguard address block in %s", cidr)
+}
+
 func markUsedAddresses(used map[string]bool, node config.Node) {
-	for _, value := range []string{node.WGServerAddress, node.WGClientAddress, node.WGAddress} {
+	markUsedCIDRAddresses(used, node.WGServerAddress)
+	for _, value := range []string{node.WGClientAddress, node.WGWarpClientAddress, node.WGAddress} {
 		if value == "" {
 			continue
 		}
-		host := strings.Split(value, "/")[0]
+		host := addressIP(value)
 		used[host] = true
+	}
+}
+
+func markUsedCIDRAddresses(used map[string]bool, cidr string) {
+	if strings.TrimSpace(cidr) == "" {
+		return
+	}
+	ip, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		used[addressIP(cidr)] = true
+		return
+	}
+	ip4 := ip.To4()
+	networkIP := ipNet.IP.To4()
+	if ip4 == nil || networkIP == nil {
+		used[addressIP(cidr)] = true
+		return
+	}
+	ones, bits := ipNet.Mask.Size()
+	if bits != 32 || ones < 24 {
+		used[addressIP(cidr)] = true
+		return
+	}
+	base := uint32(networkIP[0])<<24 | uint32(networkIP[1])<<16 | uint32(networkIP[2])<<8 | uint32(networkIP[3])
+	size := uint32(1) << uint32(32-ones)
+	for offset := uint32(1); offset+1 < size; offset++ {
+		used[uint32ToIP(base+offset)] = true
 	}
 }
 
@@ -255,10 +390,14 @@ func uint32ToIP(value uint32) string {
 }
 
 func RenderDirectForwardingHooks(plan Plan) string {
-	clientIP := strings.TrimSuffix(plan.ClientAddress, "/30")
+	clientIP := addressIP(plan.ClientAddress)
 	if plan.EgressInterface == "" {
 		return fmt.Sprintf("PostUp = sysctl -w net.ipv4.ip_forward=1; iptables -C FORWARD -i %%i -j ACCEPT 2>/dev/null || iptables -A FORWARD -i %%i -j ACCEPT; iptables -C FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT\nPostDown = iptables -D FORWARD -i %%i -j ACCEPT 2>/dev/null || true; iptables -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true")
 	}
 
 	return fmt.Sprintf("PostUp = sysctl -w net.ipv4.ip_forward=1; iptables -C FORWARD -i %%i -j ACCEPT 2>/dev/null || iptables -A FORWARD -i %%i -j ACCEPT; iptables -C FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -C POSTROUTING -s %s/32 -o %s -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s %s/32 -o %s -j MASQUERADE\nPostDown = iptables -D FORWARD -i %%i -j ACCEPT 2>/dev/null || true; iptables -D FORWARD -o %%i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true; iptables -t nat -D POSTROUTING -s %s/32 -o %s -j MASQUERADE 2>/dev/null || true", clientIP, plan.EgressInterface, clientIP, plan.EgressInterface, clientIP, plan.EgressInterface)
+}
+
+func addressIP(value string) string {
+	return strings.Split(strings.TrimSpace(value), "/")[0]
 }

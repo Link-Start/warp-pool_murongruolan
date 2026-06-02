@@ -73,6 +73,53 @@ func TestBuildPlan(t *testing.T) {
 	}
 }
 
+func TestBuildPlanDualAllocatesTwoClientAddresses(t *testing.T) {
+	cfg := config.Default()
+	plan, err := BuildPlan(cfg, Options{
+		Node: config.Node{
+			Name:     "nat-1",
+			ExitMode: config.ExitModeDual,
+		},
+		Endpoint:         "203.0.113.1",
+		EgressInterface:  "eth0",
+		EnableForwarding: true,
+	})
+	if err != nil {
+		t.Fatalf("build dual plan: %v", err)
+	}
+	if !plan.DualMode {
+		t.Fatal("expected dual mode plan")
+	}
+	if plan.ServerAddress != "10.200.0.1/29" || plan.ClientAddress != "10.200.0.2/32" || plan.WarpClientAddress != "10.200.0.3/32" {
+		t.Fatalf("unexpected dual addresses: server=%s client=%s warp=%s", plan.ServerAddress, plan.ClientAddress, plan.WarpClientAddress)
+	}
+	if strings.Count(plan.ServerConfig, "[Peer]") != 2 {
+		t.Fatalf("expected two peers in dual server config:\n%s", plan.ServerConfig)
+	}
+	if !strings.Contains(plan.ServerConfig, "iptables -t nat -A POSTROUTING -s 10.200.0.2/32 -o eth0 -j MASQUERADE") {
+		t.Fatalf("dual server config should MASQUERADE direct client only:\n%s", plan.ServerConfig)
+	}
+	if plan.WarpClientConfig == "" || !strings.Contains(plan.WarpClientConfig, "Address = 10.200.0.3/32") {
+		t.Fatalf("missing warp client config:\n%s", plan.WarpClientConfig)
+	}
+}
+
+func TestAllocatePairSkipsDualAddressBlock(t *testing.T) {
+	cfg := config.Default()
+	cfg.Nodes = append(cfg.Nodes, config.Node{
+		WGServerAddress:     "10.200.0.1/29",
+		WGClientAddress:     "10.200.0.2/32",
+		WGWarpClientAddress: "10.200.0.3/32",
+	})
+	server, client, err := AllocatePair(cfg, "10.200.0.0/16")
+	if err != nil {
+		t.Fatalf("allocate pair: %v", err)
+	}
+	if server != "10.200.0.9" || client != "10.200.0.10" {
+		t.Fatalf("expected allocation after dual /29 block, got %s %s", server, client)
+	}
+}
+
 func TestBuildPlanUsesSeparateEndpointPort(t *testing.T) {
 	cfg := config.Default()
 	plan, err := BuildPlan(cfg, Options{

@@ -54,6 +54,11 @@ func newNodeAddCommand() *cobra.Command {
 				if err := config.CheckPortAvailable(node.BindHost, node.LocalPort); err != nil {
 					return err
 				}
+				if node.ExitMode == config.ExitModeDual {
+					if err := config.CheckPortAvailable(node.BindHost, node.WarpLocalPort); err != nil {
+						return fmt.Errorf("warp local port: %w", err)
+					}
+				}
 			}
 
 			cfg, err = config.AddNode(cfg, node)
@@ -71,10 +76,11 @@ func newNodeAddCommand() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&node.Name, "name", "", "node name")
-	cmd.Flags().StringVar(&node.ExitMode, "exit-mode", config.ExitModeDirect, "exit mode: direct or warp")
+	cmd.Flags().StringVar(&node.ExitMode, "exit-mode", config.ExitModeDirect, "exit mode: direct, warp, or dual")
 	cmd.Flags().StringVar(&node.Proxy, "proxy", config.ProxyMixed, "local proxy protocol: socks5, http, or mixed")
 	cmd.Flags().StringVar(&node.BindHost, "bind-host", "127.0.0.1", "local proxy bind host")
 	cmd.Flags().IntVar(&node.LocalPort, "port", 0, "local proxy port")
+	cmd.Flags().IntVar(&node.WarpLocalPort, "warp-port", 0, "local proxy port for WARP in dual mode")
 	cmd.Flags().StringVar(&node.PublicIP, "public-ip", "", "node public IP")
 	cmd.Flags().StringVar(&node.Country, "country", "", "node country or region")
 	cmd.Flags().StringVar(&node.WGDevice, "wg-device", "", "WireGuard device name")
@@ -100,7 +106,7 @@ func newNodeListCommand() *cobra.Command {
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 			fmt.Fprintln(w, "NAME\tMODE\tPROXY\tLISTEN\tPUBLIC_IP\tCOUNTRY")
 			for _, node := range cfg.Nodes {
-				listen := fmt.Sprintf("%s:%d", node.BindHost, node.LocalPort)
+				listen := nodeListenSummary(node)
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", node.Name, node.ExitMode, node.Proxy, listen, node.PublicIP, node.Country)
 			}
 			return w.Flush()
@@ -240,17 +246,23 @@ func newNodeModeCommand() *cobra.Command {
 			if err := config.ValidateExitMode(targetMode); err != nil {
 				return err
 			}
+			if node.ExitMode == config.ExitModeDual || targetMode == config.ExitModeDual {
+				return fmt.Errorf("%s", tr(language,
+					"node mode switching does not currently change dual-mode wiring; redeploy or refresh the node instead",
+					"当前 node mode 切换不会改写 dual 双模式 WireGuard 通道；请重新部署该节点，或后续使用配置刷新流程重新下发",
+				))
+			}
 			if warpInstall == "" {
 				warpInstall = config.WarpInstallAuto
 			}
-			if targetMode != config.ExitModeWarp {
+			if targetMode != config.ExitModeWarp && targetMode != config.ExitModeDual {
 				warpInstall = config.WarpInstallAuto
 			}
 			if err := config.ValidateWarpInstall(warpInstall); err != nil {
 				return err
 			}
-			if targetMode != config.ExitModeWarp && cmd.Flags().Changed("warp-install") {
-				return fmt.Errorf("--warp-install only applies when target mode is warp")
+			if targetMode != config.ExitModeWarp && targetMode != config.ExitModeDual && cmd.Flags().Changed("warp-install") {
+				return fmt.Errorf("--warp-install only applies when target mode is warp or dual")
 			}
 			if targetMode != config.ExitModeDirect && removeWarp {
 				return fmt.Errorf("--remove-warp only applies when target mode is direct")
@@ -615,7 +627,12 @@ func printNodeDetails(out interface{ Write([]byte) (int, error) }, language stri
 	printNodeField(w, language, "name", "节点名称", node.Name)
 	printNodeField(w, language, "exit_mode", "出口模式", node.ExitMode)
 	printNodeField(w, language, "proxy", "本地代理协议", node.Proxy)
-	printNodeField(w, language, "listen", "本地代理监听", fmt.Sprintf("%s:%d", node.BindHost, node.LocalPort))
+	if node.ExitMode == config.ExitModeDual {
+		printNodeField(w, language, "direct_listen", "直连本地代理监听", fmt.Sprintf("%s:%d", node.BindHost, node.LocalPort))
+		printNodeField(w, language, "warp_listen", "WARP 本地代理监听", fmt.Sprintf("%s:%d", node.BindHost, node.WarpLocalPort))
+	} else {
+		printNodeField(w, language, "listen", "本地代理监听", fmt.Sprintf("%s:%d", node.BindHost, node.LocalPort))
+	}
 	printNodeField(w, language, "public_ip", "公网IP", node.PublicIP)
 	printNodeField(w, language, "country", "地区", node.Country)
 	printNodeField(w, language, "wg_device", "远端 WireGuard 设备", node.WGDevice)
@@ -626,6 +643,9 @@ func printNodeDetails(out interface{ Write([]byte) (int, error) }, language stri
 	}
 	printNodeField(w, language, "wg_server_address", "WireGuard 服务端地址", node.WGServerAddress)
 	printNodeField(w, language, "wg_client_address", "WireGuard 客户端地址", node.WGClientAddress)
+	if node.ExitMode == config.ExitModeDual {
+		printNodeField(w, language, "wg_warp_client_address", "WireGuard WARP 客户端地址", node.WGWarpClientAddress)
+	}
 	printNodeField(w, language, "wg_listen_port", "WireGuard 监听端口", intString(node.WGListenPort))
 	printNodeField(w, language, "endpoint", "WireGuard 公网端点", node.Endpoint)
 	printNodeField(w, language, "created_at", "创建时间", node.CreatedAt)
@@ -658,6 +678,13 @@ func printNodeDetails(out interface{ Write([]byte) (int, error) }, language stri
 
 func nodeUsesSystemWireGuard(node config.Node) bool {
 	return strings.TrimSpace(node.WGLocalConfigPath) != ""
+}
+
+func nodeListenSummary(node config.Node) string {
+	if node.ExitMode == config.ExitModeDual {
+		return fmt.Sprintf("direct=%s:%d,warp=%s:%d", node.BindHost, node.LocalPort, node.BindHost, node.WarpLocalPort)
+	}
+	return fmt.Sprintf("%s:%d", node.BindHost, node.LocalPort)
 }
 
 func printNodeField(w *tabwriter.Writer, language string, enKey string, zhKey string, value string) {

@@ -11,6 +11,7 @@ DRY_RUN="false"
 NODE_EXIT_MODE=""
 SERVER_URL_FOR_STATE=""
 NODE_NAME=""
+WG_WARP_CLIENT_ADDR=""
 LANGUAGE="${WARPPOOL_LANG:-${WARPOOL_LANG:-en}}"
 
 log() {
@@ -135,14 +136,14 @@ install_node_uninstaller() {
 }
 
 maybe_install_warp() {
-  if [ "$MODE" = "direct" ]; then
-    log "direct mode selected, skipping Cloudflare WARP installation"
-    return 0
-  fi
+	if [ "$MODE" = "direct" ]; then
+		log "direct mode selected, skipping Cloudflare WARP installation"
+		return 0
+	fi
 
-  if [ "$MODE" != "warp" ]; then
-    fail "unsupported mode: $MODE"
-  fi
+	if [ "$MODE" != "warp" ] && [ "$MODE" != "dual" ]; then
+		fail "unsupported mode: $MODE"
+	fi
 
   local dir
   dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
@@ -190,6 +191,7 @@ load_prepare_response() {
   WG_DEVICE_B64=""
   WG_SERVER_ADDR_B64=""
   WG_CLIENT_ADDR_B64=""
+  WG_WARP_CLIENT_ADDR_B64=""
   NODE_EXIT_MODE_B64=""
   SERVER_CONFIG_B64=""
   eval "$response"
@@ -200,6 +202,7 @@ load_prepare_response() {
   WG_DEVICE="$(printf '%s' "$WG_DEVICE_B64" | decode_b64)"
   WG_SERVER_ADDR="$(printf '%s' "$WG_SERVER_ADDR_B64" | decode_b64)"
   WG_CLIENT_ADDR="$(printf '%s' "$WG_CLIENT_ADDR_B64" | decode_b64)"
+  WG_WARP_CLIENT_ADDR="$(printf '%s' "$WG_WARP_CLIENT_ADDR_B64" | decode_b64)"
   NODE_EXIT_MODE="$(printf '%s' "$NODE_EXIT_MODE_B64" | decode_b64)"
   [ -z "$NODE_EXIT_MODE" ] || MODE="$NODE_EXIT_MODE"
 }
@@ -231,7 +234,7 @@ write_remote_config() {
   [ -n "$SERVER_CONFIG" ] || fail "register prepare response missing server_config"
   [ -n "$WG_DEVICE" ] || fail "register prepare response missing node.wg_device"
 
-  if [ "$MODE" = "direct" ]; then
+  if [ "$MODE" = "direct" ] || [ "$MODE" = "dual" ]; then
     SERVER_CONFIG="$(append_direct_forwarding_hooks "$SERVER_CONFIG")"
   fi
 
@@ -269,6 +272,7 @@ write_node_state() {
   "wg_device": "$WG_DEVICE",
   "wg_server_address": "$WG_SERVER_ADDR",
   "wg_client_address": "$WG_CLIENT_ADDR",
+  "wg_warp_client_address": "$WG_WARP_CLIENT_ADDR",
   "last_mode": "$MODE",
   "language": "$LANGUAGE"
 }
@@ -317,17 +321,23 @@ start_remote_wireguard() {
 }
 
 maybe_enable_warp_forwarding() {
-  if [ "$MODE" != "warp" ]; then
+  if [ "$MODE" != "warp" ] && [ "$MODE" != "dual" ]; then
     return 0
   fi
   local dir
+  local warp_client_addr
   dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
   [ -r "$dir/warp_forward.sh" ] || fail "WARP forward helper not found: $dir/warp_forward.sh"
-  run bash "$dir/warp_forward.sh" action=up "device=$WG_DEVICE" "client_addr=$WG_CLIENT_ADDR" "server_addr=$WG_SERVER_ADDR"
+  warp_client_addr="$WG_CLIENT_ADDR"
+  if [ "$MODE" = "dual" ]; then
+    [ -n "$WG_WARP_CLIENT_ADDR" ] || fail "dual mode missing wg_warp_client_address from server"
+    warp_client_addr="$WG_WARP_CLIENT_ADDR"
+  fi
+  run bash "$dir/warp_forward.sh" action=up "device=$WG_DEVICE" "client_addr=$warp_client_addr" "server_addr=$WG_SERVER_ADDR"
 }
 
 enable_direct_forwarding() {
-  if [ "$MODE" != "direct" ]; then
+  if [ "$MODE" != "direct" ] && [ "$MODE" != "dual" ]; then
     return 0
   fi
   local egress client_ip

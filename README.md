@@ -14,6 +14,7 @@ WireGuard-based multi-exit proxy management for small VPS and NAT VPS nodes.
 - [Installation](#installation)
 - [Quick Start: Push Deployment with Direct Mode](#quick-start-push-deployment-with-direct-mode)
 - [WARP Mode](#warp-mode)
+- [Dual Mode](#dual-mode)
 - [Pull Deployment](#pull-deployment)
 - [Deploy Token](#deploy-token)
 - [Commands](#commands)
@@ -33,6 +34,7 @@ Exit mode:
 
 - `direct`: traffic exits through the node's own network.
 - `warp`: traffic exits through Cloudflare WARP on the node.
+- `dual`: one exit node exposes both direct and WARP local proxy ports.
 
 Typical flow:
 
@@ -53,6 +55,7 @@ Application
 - WireGuard tunnel generation and deployment
 - SSH Push deployment for exit nodes
 - Optional Cloudflare WARP egress
+- `dual` mode: one node can provide both direct and WARP egress ports
 - User-defined local proxy ports
 - `socks5`, `http`, and `mixed` local proxy modes
 - sing-box config generation and process management
@@ -276,9 +279,56 @@ WARP mode is optimized for 1 GB-class small disk nodes. WarpPool installs WARP-s
 
 ---
 
+## Dual Mode
+
+`dual` mode lets one exit node expose both direct and WARP local proxy ports:
+
+```text
+127.0.0.1:<direct-port> -> WireGuard direct client address -> node's own network
+127.0.0.1:<warp-port>   -> WireGuard WARP client address   -> node WARP
+```
+
+Push deployment example:
+
+```bash
+warppool deploy \
+  --name nat01 \
+  --exit-mode dual \
+  --proxy mixed \
+  --port 10133 \
+  --warp-port 10134 \
+  --ssh-host 203.0.113.10 \
+  --ssh-user root \
+  --wg-listen-port 51820 \
+  --wg-endpoint-port 30021
+```
+
+In interactive deployment, selecting `dual/direct+warp` asks for:
+
+- direct local proxy port
+- WARP local proxy port
+
+Both ports are checked for availability. They must be different and must not conflict with existing nodes or unused Deploy Tokens.
+
+Test:
+
+```bash
+curl -x socks5h://127.0.0.1:10133 https://api.ipify.org # direct egress
+curl -x socks5h://127.0.0.1:10134 https://api.ipify.org # WARP egress
+```
+
+Notes:
+
+- `dual` uses the same remote WireGuard listen port, so NAT VPS users do not need a second UDP mapping.
+- The exit node routes by WireGuard client source address: the direct address goes to the node network, and the WARP address goes to Cloudflare WARP.
+- `warppool ping <node>` checks both local proxy ports in dual mode.
+- Existing single-mode nodes cannot become dual by changing local config only. Redeploy the node, or later use the configuration refresh flow to push dual WireGuard metadata.
+
+---
+
 ## Pull Deployment
 
-Recommended flow: run `warppool deploy-token` on the main server first, then copy the generated one-line install command to the exit node. This makes the main server the source of truth for node name, exit mode, local proxy protocol, and local proxy port. The exit node only provides node-side WireGuard/NAT endpoint information.
+Recommended flow: run `warppool deploy-token` on the main server first, then copy the generated one-line install command to the exit node. This makes the main server the source of truth for node name, exit mode, local proxy protocol, and local proxy port. The exit node only provides node-side WireGuard/NAT endpoint information. In `dual` mode, the main server asks for both direct and WARP local proxy ports.
 
 If you run the node installer directly on the exit node:
 
@@ -329,11 +379,11 @@ Generate token command:
 warppool deploy-token
 ```
 
-The command asks for node name, exit mode, proxy protocol, and local proxy port. It then prints the Deploy Token plus a one-line node installation command. The exit node uses that command to request WireGuard config, start WireGuard, and complete registration. After registration, the main server starts the local proxy service automatically.
+The command asks for node name, exit mode, proxy protocol, and local proxy port. In `dual` mode, it also asks for the WARP local proxy port. It then prints the Deploy Token plus a one-line node installation command. The exit node uses that command to request WireGuard config, start WireGuard, and complete registration. After registration, the main server starts the local proxy service automatically.
 
 To avoid duplicate configuration, Deploy Token uses these sources of truth:
 
-- Main server: node name, exit mode, proxy protocol, local proxy port.
+- Main server: node name, exit mode, proxy protocol, local proxy port; in dual mode, also the WARP local proxy port.
 - Exit node: node-side WireGuard listen port, auto-detected or manually entered public endpoint, and NAT-mapped public UDP port.
 
 For NAT VPS nodes where the public UDP mapping differs from the node-side WireGuard listen port, run the generated install command on the exit node and enter the provider-mapped public UDP port when prompted.
@@ -352,6 +402,7 @@ warppool node stop nat01 # Stop local proxy service
 warppool node status nat01 # Show node nat01 runtime status
 warppool node mode nat01 warp # Switch nat01 to WARP egress; auto-detect and install/reuse WARP
 warppool node mode nat01 direct # Switch nat01 back to direct egress
+warppool deploy --exit-mode dual # Deploy a new node with both direct and WARP ports
 warppool remove nat01 # Remove node nat01 record only
 warppool node remove nat01 --clean-wg # Remove node nat01 and delete local WG client config
 ```
@@ -411,7 +462,7 @@ warppool export clash -o clash.yaml # Export Clash-compatible config
 ```bash
 warppool version # Show version information
 warppool doctor # Check local runtime and port status
-warppool ping nat01 # Test node latency target, direct HTTP latency, and proxy egress IP/latency
+warppool ping nat01 # Test node latency target, direct HTTP latency, and proxy egress IP/latency; dual mode checks both proxy ports
 warppool upgrade --yes # Upgrade binary and bundled installer assets
 warppool speedtest --proxy http://127.0.0.1:10133 # Run a simple speed test through a proxy
 ```

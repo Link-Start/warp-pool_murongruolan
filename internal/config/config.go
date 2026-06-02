@@ -14,6 +14,7 @@ import (
 const (
 	ExitModeDirect = "direct"
 	ExitModeWarp   = "warp"
+	ExitModeDual   = "dual"
 
 	ProxySocks5 = "socks5"
 	ProxyHTTP   = "http"
@@ -54,33 +55,38 @@ type Defaults struct {
 }
 
 type Node struct {
-	Name               string `json:"name"`
-	ExitMode           string `json:"exit_mode"`
-	Proxy              string `json:"proxy"`
-	BindHost           string `json:"bind_host"`
-	LocalPort          int    `json:"local_port"`
-	PublicIP           string `json:"public_ip,omitempty"`
-	Country            string `json:"country,omitempty"`
-	WGDevice           string `json:"wg_device,omitempty"`
-	WGAddress          string `json:"wg_address,omitempty"`
-	WGServerAddress    string `json:"wg_server_address,omitempty"`
-	WGClientAddress    string `json:"wg_client_address,omitempty"`
-	WGListenPort       int    `json:"wg_listen_port,omitempty"`
-	WGServerPublicKey  string `json:"wg_server_public_key,omitempty"`
-	WGClientPublicKey  string `json:"wg_client_public_key,omitempty"`
-	WGClientPrivateKey string `json:"wg_client_private_key,omitempty"`
-	WGClientConfig     string `json:"wg_client_config,omitempty"`
-	WGLocalDevice      string `json:"wg_local_device,omitempty"`
-	WGLocalConfigPath  string `json:"wg_local_config_path,omitempty"`
-	Endpoint           string `json:"endpoint,omitempty"`
-	SSHHost            string `json:"ssh_host,omitempty"`
-	SSHPort            int    `json:"ssh_port,omitempty"`
-	SSHUser            string `json:"ssh_user,omitempty"`
-	SSHKeyPath         string `json:"ssh_key_path,omitempty"`
-	SSHKnownHostsPath  string `json:"ssh_known_hosts_path,omitempty"`
-	SSHInsecureHostKey bool   `json:"ssh_insecure_skip_host_key_check,omitempty"`
-	CreatedAt          string `json:"created_at,omitempty"`
-	LastUpdated        string `json:"last_updated,omitempty"`
+	Name                   string `json:"name"`
+	ExitMode               string `json:"exit_mode"`
+	Proxy                  string `json:"proxy"`
+	BindHost               string `json:"bind_host"`
+	LocalPort              int    `json:"local_port"`
+	WarpLocalPort          int    `json:"warp_local_port,omitempty"`
+	PublicIP               string `json:"public_ip,omitempty"`
+	Country                string `json:"country,omitempty"`
+	WGDevice               string `json:"wg_device,omitempty"`
+	WGAddress              string `json:"wg_address,omitempty"`
+	WGServerAddress        string `json:"wg_server_address,omitempty"`
+	WGClientAddress        string `json:"wg_client_address,omitempty"`
+	WGListenPort           int    `json:"wg_listen_port,omitempty"`
+	WGServerPublicKey      string `json:"wg_server_public_key,omitempty"`
+	WGClientPublicKey      string `json:"wg_client_public_key,omitempty"`
+	WGClientPrivateKey     string `json:"wg_client_private_key,omitempty"`
+	WGClientConfig         string `json:"wg_client_config,omitempty"`
+	WGWarpClientAddress    string `json:"wg_warp_client_address,omitempty"`
+	WGWarpClientPublicKey  string `json:"wg_warp_client_public_key,omitempty"`
+	WGWarpClientPrivateKey string `json:"wg_warp_client_private_key,omitempty"`
+	WGWarpClientConfig     string `json:"wg_warp_client_config,omitempty"`
+	WGLocalDevice          string `json:"wg_local_device,omitempty"`
+	WGLocalConfigPath      string `json:"wg_local_config_path,omitempty"`
+	Endpoint               string `json:"endpoint,omitempty"`
+	SSHHost                string `json:"ssh_host,omitempty"`
+	SSHPort                int    `json:"ssh_port,omitempty"`
+	SSHUser                string `json:"ssh_user,omitempty"`
+	SSHKeyPath             string `json:"ssh_key_path,omitempty"`
+	SSHKnownHostsPath      string `json:"ssh_known_hosts_path,omitempty"`
+	SSHInsecureHostKey     bool   `json:"ssh_insecure_skip_host_key_check,omitempty"`
+	CreatedAt              string `json:"created_at,omitempty"`
+	LastUpdated            string `json:"last_updated,omitempty"`
 }
 
 type DeployToken struct {
@@ -271,10 +277,10 @@ func ValidateProxy(proxy string) error {
 
 func ValidateExitMode(mode string) error {
 	switch mode {
-	case ExitModeDirect, ExitModeWarp:
+	case ExitModeDirect, ExitModeWarp, ExitModeDual:
 		return nil
 	default:
-		return fmt.Errorf("unsupported exit mode %q, expected direct or warp", mode)
+		return fmt.Errorf("unsupported exit mode %q, expected direct, warp, or dual", mode)
 	}
 }
 
@@ -332,17 +338,38 @@ func ValidateNode(cfg Config, node Node) error {
 	if err := ValidatePort(node.LocalPort); err != nil {
 		return err
 	}
+	if node.ExitMode == ExitModeDual {
+		if err := ValidatePort(node.WarpLocalPort); err != nil {
+			return fmt.Errorf("warp local port: %w", err)
+		}
+		if node.WarpLocalPort == node.LocalPort {
+			return fmt.Errorf("dual mode requires different direct and warp local ports: %d", node.LocalPort)
+		}
+	}
 
 	for _, existing := range cfg.Nodes {
 		if existing.Name == node.Name {
 			return fmt.Errorf("node already exists: %s", node.Name)
 		}
-		if existing.BindHost == node.BindHost && existing.LocalPort == node.LocalPort {
+		if portUsedByNode(existing, node.BindHost, node.LocalPort) {
 			return fmt.Errorf("local port already used by node %s: %s:%d", existing.Name, node.BindHost, node.LocalPort)
+		}
+		if node.ExitMode == ExitModeDual && portUsedByNode(existing, node.BindHost, node.WarpLocalPort) {
+			return fmt.Errorf("warp local port already used by node %s: %s:%d", existing.Name, node.BindHost, node.WarpLocalPort)
 		}
 	}
 
 	return nil
+}
+
+func portUsedByNode(node Node, bindHost string, port int) bool {
+	if node.BindHost != bindHost {
+		return false
+	}
+	if node.LocalPort == port {
+		return true
+	}
+	return node.ExitMode == ExitModeDual && node.WarpLocalPort == port
 }
 
 func AddNode(cfg Config, node Node) (Config, error) {
@@ -457,6 +484,12 @@ func AddDeployToken(cfg Config, token DeployToken) (Config, error) {
 		}
 		if existing.Node.BindHost == token.Node.BindHost && existing.Node.LocalPort == token.Node.LocalPort {
 			return cfg, fmt.Errorf("unused deploy token already reserves local port: %s:%d", token.Node.BindHost, token.Node.LocalPort)
+		}
+		if token.Node.ExitMode == ExitModeDual && portUsedByNode(existing.Node, token.Node.BindHost, token.Node.WarpLocalPort) {
+			return cfg, fmt.Errorf("unused deploy token already reserves warp local port: %s:%d", token.Node.BindHost, token.Node.WarpLocalPort)
+		}
+		if existing.Node.ExitMode == ExitModeDual && portUsedByNode(token.Node, existing.Node.BindHost, existing.Node.WarpLocalPort) {
+			return cfg, fmt.Errorf("unused deploy token already reserves local port: %s:%d", existing.Node.BindHost, existing.Node.WarpLocalPort)
 		}
 		nextTokens = append(nextTokens, existing)
 	}
@@ -621,6 +654,9 @@ func AddNodeModeToken(cfg Config, item NodeModeToken) (Config, error) {
 	}
 	if item.Node.WGDevice == "" || item.Node.WGServerAddress == "" || item.Node.WGClientAddress == "" {
 		return cfg, fmt.Errorf("node %s has incomplete WireGuard metadata; deploy it first", item.NodeName)
+	}
+	if item.TargetMode == ExitModeDual && item.Node.WGWarpClientAddress == "" {
+		return cfg, fmt.Errorf("node %s has no dual-mode WireGuard metadata; redeploy it as dual first", item.NodeName)
 	}
 
 	nextModeTokens := cfg.ModeTokens[:0]

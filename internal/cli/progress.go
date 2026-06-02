@@ -265,7 +265,12 @@ func printDeploySummary(out io.Writer, language string, node config.Node, proxyS
 	if config.NormalizeLanguage(language) == "zh" {
 		fmt.Fprintf(out, "节点：%s\n", node.Name)
 		fmt.Fprintf(out, "- 出口模式：%s\n", node.ExitMode)
-		fmt.Fprintf(out, "- 本地代理：%s://%s:%d\n", node.Proxy, node.BindHost, node.LocalPort)
+		if node.ExitMode == config.ExitModeDual {
+			fmt.Fprintf(out, "- 直连本地代理：%s://%s:%d\n", node.Proxy, node.BindHost, node.LocalPort)
+			fmt.Fprintf(out, "- WARP 本地代理：%s://%s:%d\n", node.Proxy, node.BindHost, node.WarpLocalPort)
+		} else {
+			fmt.Fprintf(out, "- 本地代理：%s://%s:%d\n", node.Proxy, node.BindHost, node.LocalPort)
+		}
 		if node.Endpoint != "" {
 			fmt.Fprintf(out, "- WireGuard 公网端点：%s\n", node.Endpoint)
 		}
@@ -279,7 +284,12 @@ func printDeploySummary(out io.Writer, language string, node config.Node, proxyS
 	}
 	fmt.Fprintf(out, "Node: %s\n", node.Name)
 	fmt.Fprintf(out, "- Exit mode: %s\n", node.ExitMode)
-	fmt.Fprintf(out, "- Local proxy: %s://%s:%d\n", node.Proxy, node.BindHost, node.LocalPort)
+	if node.ExitMode == config.ExitModeDual {
+		fmt.Fprintf(out, "- Direct local proxy: %s://%s:%d\n", node.Proxy, node.BindHost, node.LocalPort)
+		fmt.Fprintf(out, "- WARP local proxy: %s://%s:%d\n", node.Proxy, node.BindHost, node.WarpLocalPort)
+	} else {
+		fmt.Fprintf(out, "- Local proxy: %s://%s:%d\n", node.Proxy, node.BindHost, node.LocalPort)
+	}
 	if node.Endpoint != "" {
 		fmt.Fprintf(out, "- WireGuard endpoint: %s\n", node.Endpoint)
 	}
