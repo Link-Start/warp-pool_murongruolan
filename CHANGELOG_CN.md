@@ -1,5 +1,13 @@
 # 更新日志
 
+## v0.1.10
+
+- 新增短命令 `wpl`，等效于 `warppool`，例如 `wpl node list`、`wpl ping nat01`。
+- 新增子节点卸载短命令 `wpl-node-uninstall`，等效于 `warppool-node-uninstall`。
+- 优化 `warppool ping` 中文输出，将“节点公网地址”调整为更准确的“节点延迟检测地址”。
+- 修复中文模式下 `warppool ping` 仍混入英文 `mode`、`proxy check ok` 等提示的问题。
+- 增强卸载安全性：主服务器卸载只会删除指向 WarpPool 的 `wpl` 软链接，不会误删其他程序占用的同名文件。
+
 ## v0.1.9
 
 - 新增 Alpine WARP 支持，基于 `wgcf` 生成 WireGuard 配置，并通过 sing-box 内置 WireGuard endpoint 出口。
