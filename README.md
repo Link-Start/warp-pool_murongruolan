@@ -32,7 +32,7 @@ WarpPool lets one main server manage multiple exit nodes. Applications connect t
 Exit mode:
 
 - `direct`: traffic exits through the node's own network.
-- `warp`: traffic exits through the official Cloudflare WARP client running on the node.
+- `warp`: traffic exits through Cloudflare WARP on the node.
 
 Typical flow:
 
@@ -74,7 +74,7 @@ Main server
 Exit node
   - WireGuard server
   - IPv4 forwarding / NAT
-  - optional official Cloudflare WARP client
+  - optional Cloudflare WARP egress runtime
   - no WarpPool Agent
 ```
 
@@ -97,7 +97,7 @@ Exit node
 | Debian 11+ | Supported |
 | Alpine 3.20+ | Supported |
 
-WARP mode depends on Cloudflare's official Linux client packages. Alpine WARP mode is not supported by the built-in installer.
+WARP mode is supported on Ubuntu/Debian and Alpine. Ubuntu/Debian use the official Cloudflare WARP client when available. Alpine uses `wgcf` to generate a WARP WireGuard profile and sing-box's embedded WireGuard endpoint. On Alpine, WarpPool first runs `apk update` and installs `sing-box` from the Alpine package repository when available; if the package is unavailable, cannot run, or cannot load the generated WARP config, WarpPool falls back to the GitHub musl build.
 
 Recommended disk size: around 1 GB. The installer is optimized for small disks by installing only required WireGuard tools, avoiding the WireGuard meta package on Debian/Ubuntu, and cleaning package caches after installation steps.
 
@@ -105,8 +105,8 @@ Recommended disk size: around 1 GB. The installer is optimized for small disks b
 
 | Architecture | Status | WARP |
 | --- | --- | --- |
-| amd64 | Supported | Supported when Cloudflare package exists |
-| arm64 | Supported | Supported when Cloudflare package exists |
+| amd64 | Supported | Supported |
+| arm64 | Supported | Supported |
 
 ---
 
@@ -228,7 +228,7 @@ warppool deploy \
   --wg-listen-port 51821
 ```
 
-The installer uses the official Cloudflare WARP client and runs:
+On Ubuntu/Debian, the installer uses the official Cloudflare WARP client and runs:
 
 ```bash
 warp-cli --accept-tos registration new
@@ -250,7 +250,27 @@ curl --socks5 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace
 
 Current limitation: WARP forwarding is TCP-first. UDP and IPv6 are not promised as complete yet.
 
-WARP mode is optimized for 1 GB-class small disk nodes. WarpPool installs repository tools only when WARP mode is selected, uses `--no-install-recommends` where possible, cleans package caches after each step, and warns instead of blocking when disk space is below the recommended threshold but above the hard minimum.
+On Alpine, WARP mode uses:
+
+```text
+wgcf generated WARP WireGuard profile
+  -> sing-box embedded WireGuard endpoint
+  -> endpoint probing: IPv6 first, IPv4 fallback, domain fallback
+```
+
+For sing-box on Alpine, WarpPool uses this priority:
+
+```text
+1. Existing runnable sing-box
+2. apk update && apk add --no-cache sing-box
+3. GitHub musl sing-box package fallback
+```
+
+After installation, WarpPool checks that sing-box can load the generated WARP config. If the Alpine repository package is too old or incompatible, WarpPool automatically falls back to the GitHub musl build.
+
+The installer verifies WARP by checking `warp=on`. If all endpoint candidates fail, it reports the tried path and asks you to check IPv6 connectivity, UDP 2408 outbound access, DNS, or provider WARP restrictions.
+
+WARP mode is optimized for 1 GB-class small disk nodes. WarpPool installs WARP-specific tools only when WARP mode is selected, uses `--no-install-recommends` where possible, cleans package caches after each step, and warns instead of blocking when disk space is below the recommended threshold but above the hard minimum.
 
 ---
 
@@ -279,7 +299,7 @@ For dependency-only installation, pass the exit mode to decide whether WARP shou
 # direct mode installs WireGuard and base dependencies only
 wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- mode=direct
 
-# WARP mode also installs the official Cloudflare WARP client
+# WARP mode installs the WARP runtime for the node OS
 curl -fsSL https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- mode=warp
 ```
 
@@ -385,6 +405,12 @@ warppool upgrade --yes # Upgrade binary and bundled installer assets
 warppool speedtest --proxy http://127.0.0.1:10133 # Run a simple speed test through a proxy
 ```
 
+On an exit node, WARP backend probing can be run manually for diagnostics:
+
+```bash
+bash /path/to/warp_forward.sh action=probe device=wpnat01 client_addr=10.200.0.2/32 server_addr=10.200.0.1/32 backend=wireguard
+```
+
 `warppool ping` uses multiple fallback HTTP check URLs by default:
 
 ```text
@@ -422,7 +448,7 @@ Common usage on the exit node:
 ```bash
 warppool-node-uninstall device=wpnat01 # Remove one WarpPool WireGuard device
 warppool-node-uninstall all=true # Remove all WarpPool WireGuard devices on this node
-warppool-node-uninstall all=true remove_warp=true # Also remove Cloudflare WARP package
+warppool-node-uninstall all=true remove_warp=true # Also remove/clean WARP runtime
 warppool-node-uninstall all=true remove_wireguard=true # Also remove WireGuard packages
 ```
 

@@ -40,7 +40,7 @@ Examples:
 
 Notes:
   - Without device= or all=true, the script auto-selects the only /etc/wireguard/wp*.conf file if exactly one exists.
-  - remove_warp=true removes the Cloudflare WARP package and repository when apt is available.
+  - remove_warp=true removes the Cloudflare WARP package on apt systems and wgcf WARP state on Alpine.
   - remove_wireguard=true removes WireGuard packages when apt/apk is available.
 USAGE
 }
@@ -133,6 +133,10 @@ discover_devices() {
 
 systemd_available() {
   command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
+}
+
+openrc_available() {
+  command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1 && [ -d /etc/init.d ]
 }
 
 disable_systemd_unit() {
@@ -248,8 +252,14 @@ remove_warp_forwarding() {
   local device="$1"
   local unit="warppool-warp-forward-$device.service"
   local unit_path="/etc/systemd/system/$unit"
+  local openrc="warppool-warp-forward-$device"
   disable_systemd_unit "$unit"
   remove_systemd_unit_file "$unit_path"
+  if openrc_available; then
+    run rc-service "$openrc" stop >/dev/null 2>&1 || true
+    run rc-update del "$openrc" default >/dev/null 2>&1 || true
+    run rm -f "/etc/init.d/$openrc"
+  fi
   stop_legacy_pid "/var/lib/warppool/warp-forward/$device.pid"
   delete_nat_redirect_rules "$device"
   run rm -f "/var/lib/warppool/warp-forward/$device.json" "/var/lib/warppool/warp-forward/$device.log"
@@ -289,7 +299,7 @@ remove_warp_package() {
   if [ "$REMOVE_WARP" != "true" ]; then
     return 0
   fi
-  log "removing Cloudflare WARP package"
+  log "removing WARP package/state"
   if systemd_available; then
     run systemctl disable --now warp-svc.service >/dev/null 2>&1 || true
   fi
@@ -298,7 +308,12 @@ remove_warp_package() {
     run rm -f /etc/apt/sources.list.d/cloudflare-client.list /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
     return 0
   fi
-  log "warning: apt-get not found, skipping Cloudflare WARP package removal"
+  if command -v apk >/dev/null 2>&1; then
+    run rm -rf /etc/warppool-node/warp
+    run rm -f /usr/local/lib/warppool/bin/wgcf
+    return 0
+  fi
+  log "warning: supported package manager not found, skipping WARP package removal"
 }
 
 remove_wireguard_packages() {

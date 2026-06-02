@@ -403,6 +403,11 @@ enable_direct_forwarding() {
 
 ensure_warp_ready() {
   local installer
+  if command -v apk >/dev/null 2>&1 && ! command -v apt-get >/dev/null 2>&1; then
+    installer="$(helper_path warp_wgcf.sh)"
+    run bash "$installer" "policy=$WARP_INSTALL"
+    return 0
+  fi
   installer="$(helper_path warp_install.sh)"
   run bash "$installer" "policy=$WARP_INSTALL"
 }
@@ -429,7 +434,13 @@ remove_warp_package() {
     run env DEBIAN_FRONTEND=noninteractive apt-get remove -y cloudflare-warp
     return 0
   fi
-  log_i "warning: automatic WARP removal is only implemented for apt-based systems" "警告：自动卸载 WARP 当前只支持 apt 系统"
+  if command -v apk >/dev/null 2>&1; then
+    log_i "removing wgcf WARP state" "正在删除 wgcf WARP 状态"
+    run rm -rf /etc/warppool-node/warp
+    run rm -f /usr/local/lib/warppool/bin/wgcf
+    return 0
+  fi
+  log_i "warning: automatic WARP removal is not implemented for this system" "警告：当前系统暂不支持自动卸载 WARP"
 }
 
 write_state() {

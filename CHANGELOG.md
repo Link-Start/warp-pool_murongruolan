@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.9
+
+- Added Alpine WARP support based on `wgcf` generated WireGuard profiles and sing-box embedded WireGuard endpoints.
+- Alpine WARP endpoint probing now prefers IPv6, falls back to IPv4, and finally falls back to the original domain.
+- Alpine sing-box installation now prefers the Alpine package repository with `apk update && apk add --no-cache sing-box`.
+- Added automatic fallback to the GitHub musl sing-box build when the Alpine package is missing, cannot run, or cannot load WarpPool's generated WARP config.
+- Fixed failed Alpine WARP deployment caused by downloading a non-musl sing-box binary.
+
 ## v0.1.8
 
 - Officially optimized WARP mode for 1 GB-class small disk exit nodes. Debian/Ubuntu installers now avoid the `wireguard` meta package, install only required WireGuard tools, use `--no-install-recommends` where possible, and clean package caches after install steps.

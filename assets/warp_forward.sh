@@ -8,11 +8,16 @@ SERVER_ADDR=""
 TRANSPARENT_PORT="14000"
 WARP_PROXY_HOST="127.0.0.1"
 WARP_PROXY_PORT="40000"
+WARP_BACKEND="auto"
+WARP_PROFILE_PATH="/etc/warppool-node/warp/wgcf-profile.conf"
+WARP_ENDPOINT=""
+WARP_PROBE_PORT="${WARPPOOL_WARP_PROBE_PORT:-40100}"
 SINGBOX_BIN=""
 STATE_DIR="/var/lib/warppool/warp-forward"
 AUTO_INSTALL_SINGBOX="true"
 VERIFY_WARP="true"
 DRY_RUN="false"
+SINGBOX_FEATURE_FALLBACK_DONE="false"
 
 log() {
   printf '[WarpPool][warp-forward] %s\n' "$*"
@@ -37,11 +42,12 @@ usage() {
 WarpPool WARP forwarding helper
 
 Usage:
-  bash warp_forward.sh action=up|down|status device=<wg-device> client_addr=<client-cidr> [server_addr=<server-cidr>] [transparent_port=14000] [--dry-run]
+  bash warp_forward.sh action=up|down|status|probe device=<wg-device> client_addr=<client-cidr> [server_addr=<server-cidr>] [transparent_port=14000] [backend=auto|socks|wireguard] [--dry-run]
 
 This script redirects TCP traffic entering the WireGuard device to a local
-sing-box redirect inbound, then sends it to Cloudflare WARP local proxy
-127.0.0.1:40000.
+sing-box redirect inbound, then sends it to Cloudflare WARP. The default
+backend first tries the official WARP local SOCKS proxy, then falls back to
+wgcf + sing-box embedded WireGuard endpoint.
 USAGE
 }
 
@@ -62,6 +68,10 @@ parse_args() {
       transparent_port=*) TRANSPARENT_PORT="${arg#transparent_port=}" ;;
       warp_proxy_host=*) WARP_PROXY_HOST="${arg#warp_proxy_host=}" ;;
       warp_proxy_port=*) WARP_PROXY_PORT="${arg#warp_proxy_port=}" ;;
+      backend=*) WARP_BACKEND="${arg#backend=}" ;;
+      warp_profile=*) WARP_PROFILE_PATH="${arg#warp_profile=}" ;;
+      warp_endpoint=*) WARP_ENDPOINT="${arg#warp_endpoint=}" ;;
+      probe_port=*) WARP_PROBE_PORT="${arg#probe_port=}" ;;
       singbox_bin=*) SINGBOX_BIN="${arg#singbox_bin=}" ;;
       state_dir=*) STATE_DIR="${arg#state_dir=}" ;;
       auto_install_singbox=*) AUTO_INSTALL_SINGBOX="${arg#auto_install_singbox=}" ;;
@@ -106,8 +116,8 @@ validate_bool() {
 
 validate_args() {
   case "$ACTION" in
-    up|down|status) ;;
-    *) fail "unsupported action: $ACTION, expected up, down, or status" ;;
+    up|down|status|probe) ;;
+    *) fail "unsupported action: $ACTION, expected up, down, status, or probe" ;;
   esac
 
   case "$DEVICE" in
@@ -152,6 +162,20 @@ validate_args() {
       ;;
   esac
 
+  case "$WARP_BACKEND" in
+    auto|socks|wireguard) ;;
+    *) fail "unsupported backend: $WARP_BACKEND, expected auto, socks, or wireguard" ;;
+  esac
+
+  case "$WARP_PROBE_PORT" in
+    *[!0-9]*|"")
+      fail "invalid probe_port: $WARP_PROBE_PORT"
+      ;;
+  esac
+  if [ "$WARP_PROBE_PORT" -lt 1 ] || [ "$WARP_PROBE_PORT" -gt 65535 ]; then
+    fail "probe_port must be between 1 and 65535: $WARP_PROBE_PORT"
+  fi
+
   validate_bool auto_install_singbox "$AUTO_INSTALL_SINGBOX"
   validate_bool verify_warp "$VERIFY_WARP"
 
@@ -161,28 +185,112 @@ validate_args() {
   LOG_PATH="$STATE_DIR/$SAFE_DEVICE.log"
   UNIT_NAME="warppool-warp-forward-$SAFE_DEVICE.service"
   UNIT_PATH="/etc/systemd/system/$UNIT_NAME"
+  OPENRC_NAME="warppool-warp-forward-$SAFE_DEVICE"
+  OPENRC_PATH="/etc/init.d/$OPENRC_NAME"
 }
 
 script_dir() {
   cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd
 }
 
+singbox_can_run() {
+  local binary="$1"
+  [ -x "$binary" ] || return 1
+  "$binary" version >/dev/null 2>&1
+}
+
+singbox_check_config_output() {
+  local path="$1"
+  "$SINGBOX_BIN" check -c "$path" 2>&1
+}
+
+ensure_singbox_config_supported() {
+  local path="$1" output
+  if output="$(singbox_check_config_output "$path")"; then
+    return 0
+  fi
+
+  if [ "$AUTO_INSTALL_SINGBOX" = "true" ] && [ "$SINGBOX_FEATURE_FALLBACK_DONE" != "true" ]; then
+    log "current sing-box cannot load WarpPool WARP config, falling back to GitHub build"
+    printf '%s\n' "$output" >&2
+    SINGBOX_FEATURE_FALLBACK_DONE="true"
+    install_singbox default
+    if output="$(singbox_check_config_output "$path")"; then
+      return 0
+    fi
+  fi
+
+  printf '%s\n' "$output" >&2
+  fail "sing-box config check failed; install a newer sing-box or use WarpPool managed GitHub build"
+}
+
+resolve_installed_singbox_path() {
+  if singbox_can_run "/usr/local/lib/warppool/bin/sing-box"; then
+    printf '%s\n' "/usr/local/lib/warppool/bin/sing-box"
+    return 0
+  fi
+  local system_binary
+  system_binary="$(command -v sing-box 2>/dev/null || true)"
+  if [ -n "$system_binary" ] && singbox_can_run "$system_binary"; then
+    printf '%s\n' "$system_binary"
+    return 0
+  fi
+  return 1
+}
+
+install_singbox() {
+  local installer source
+  source="${1:-auto}"
+  installer="$(script_dir)/singbox_install.sh"
+  if [ ! -r "$installer" ]; then
+    fail "sing-box not found and installer missing: $installer"
+  fi
+
+  log "installing sing-box, source=$source"
+  run bash "$installer" --yes "source=$source" variant=auto install_dir=/usr/local/lib/warppool/bin
+  if [ "$DRY_RUN" = "true" ]; then
+    SINGBOX_BIN="/usr/local/lib/warppool/bin/sing-box"
+    return 0
+  fi
+  SINGBOX_BIN="$(resolve_installed_singbox_path || true)"
+  [ -n "$SINGBOX_BIN" ] || fail "sing-box installation did not produce a discoverable binary"
+  if [ "$DRY_RUN" != "true" ] && ! singbox_can_run "$SINGBOX_BIN"; then
+    fail "sing-box installation did not produce a runnable binary: $SINGBOX_BIN"
+  fi
+}
+
 resolve_singbox() {
   if [ -n "$SINGBOX_BIN" ]; then
-    if [ ! -x "$SINGBOX_BIN" ]; then
-      fail "sing-box binary is not executable: $SINGBOX_BIN"
+    if ! singbox_can_run "$SINGBOX_BIN"; then
+      fail "sing-box binary cannot run: $SINGBOX_BIN"
     fi
     return 0
   fi
 
   if [ -x "/usr/local/lib/warppool/bin/sing-box" ]; then
     SINGBOX_BIN="/usr/local/lib/warppool/bin/sing-box"
-    return 0
+    if singbox_can_run "$SINGBOX_BIN"; then
+      return 0
+    fi
+    log "existing sing-box cannot run, reinstalling: $SINGBOX_BIN"
+    if [ "$AUTO_INSTALL_SINGBOX" = "true" ]; then
+      install_singbox auto
+      return 0
+    fi
+    fail "existing sing-box cannot run: $SINGBOX_BIN"
   fi
 
   if command -v sing-box >/dev/null 2>&1; then
     SINGBOX_BIN="$(command -v sing-box)"
-    return 0
+    if singbox_can_run "$SINGBOX_BIN"; then
+      return 0
+    fi
+    log "system sing-box cannot run, installing WarpPool managed sing-box: $SINGBOX_BIN"
+    if [ "$AUTO_INSTALL_SINGBOX" = "true" ]; then
+      install_singbox auto
+      return 0
+    fi
+    fail "system sing-box cannot run: $SINGBOX_BIN"
   fi
 
   if [ "$AUTO_INSTALL_SINGBOX" != "true" ]; then
@@ -194,18 +302,8 @@ resolve_singbox() {
     fail "sing-box not found; install it or set auto_install_singbox=true"
   fi
 
-  local installer
-  installer="$(script_dir)/singbox_install.sh"
-  if [ ! -r "$installer" ]; then
-    fail "sing-box not found and installer missing: $installer"
-  fi
-
-  log "sing-box not found, installing to /usr/local/lib/warppool/bin"
-  run bash "$installer" --yes source=default install_dir=/usr/local/lib/warppool/bin
-  SINGBOX_BIN="/usr/local/lib/warppool/bin/sing-box"
-  if [ "$DRY_RUN" != "true" ] && [ ! -x "$SINGBOX_BIN" ]; then
-    fail "sing-box installation did not produce executable: $SINGBOX_BIN"
-  fi
+  log "sing-box not found"
+  install_singbox auto
 }
 
 verify_warp_proxy() {
@@ -229,9 +327,310 @@ verify_warp_proxy() {
   log "WARP proxy verified: warp=on"
 }
 
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+read_warp_profile() {
+  if [ "$DRY_RUN" = "true" ]; then
+    WARP_PRIVATE_KEY="dry-run-private-key"
+    WARP_ADDRESS_JSON='"172.16.0.2/32","2606:4700:110::1/128"'
+    WARP_PEER_PUBLIC_KEY="bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+    WARP_PROFILE_ENDPOINT_HOST="engage.cloudflareclient.com"
+    WARP_PROFILE_ENDPOINT_PORT="2408"
+    WARP_MTU="1280"
+    return 0
+  fi
+
+  [ -r "$WARP_PROFILE_PATH" ] || fail "WARP WireGuard profile not found: $WARP_PROFILE_PATH"
+
+  WARP_PRIVATE_KEY="$(sed -n 's/^[[:space:]]*PrivateKey[[:space:]]*=[[:space:]]*//p' "$WARP_PROFILE_PATH" | sed 's/[[:space:]]*$//' | head -n 1)"
+  WARP_PEER_PUBLIC_KEY="$(sed -n 's/^[[:space:]]*PublicKey[[:space:]]*=[[:space:]]*//p' "$WARP_PROFILE_PATH" | sed 's/[[:space:]]*$//' | head -n 1)"
+  WARP_MTU="$(sed -n 's/^[[:space:]]*MTU[[:space:]]*=[[:space:]]*//p' "$WARP_PROFILE_PATH" | sed 's/[[:space:]]*$//' | head -n 1)"
+  [ -n "$WARP_MTU" ] || WARP_MTU="1280"
+
+  local endpoint
+  endpoint="$(sed -n 's/^[[:space:]]*Endpoint[[:space:]]*=[[:space:]]*//p' "$WARP_PROFILE_PATH" | sed 's/[[:space:]]*$//' | head -n 1)"
+  [ -n "$WARP_PRIVATE_KEY" ] || fail "WARP profile missing PrivateKey: $WARP_PROFILE_PATH"
+  [ -n "$WARP_PEER_PUBLIC_KEY" ] || fail "WARP profile missing peer PublicKey: $WARP_PROFILE_PATH"
+  [ -n "$endpoint" ] || fail "WARP profile missing Endpoint: $WARP_PROFILE_PATH"
+
+  WARP_PROFILE_ENDPOINT_HOST="${endpoint%:*}"
+  WARP_PROFILE_ENDPOINT_PORT="${endpoint##*:}"
+  case "$WARP_PROFILE_ENDPOINT_PORT" in
+    *[!0-9]*|"") fail "invalid WARP endpoint port in profile: $endpoint" ;;
+  esac
+
+  WARP_ADDRESS_JSON="$(
+    sed -n 's/^[[:space:]]*Address[[:space:]]*=[[:space:]]*//p' "$WARP_PROFILE_PATH" | head -n 1 |
+      tr ',' '\n' |
+      sed 's/^[[:space:]]*//; s/[[:space:]]*$//' |
+      awk 'NF {gsub(/\\/,"\\\\"); gsub(/"/,"\\\""); printf "%s\"%s\"", sep, $0; sep=","}'
+  )"
+  [ -n "$WARP_ADDRESS_JSON" ] || fail "WARP profile missing Address: $WARP_PROFILE_PATH"
+}
+
+add_unique_candidate() {
+  local host="$1" port="$2" value
+  [ -n "$host" ] || return 0
+  [ -n "$port" ] || return 0
+  value="$host|$port"
+  case "
+$WARP_ENDPOINT_CANDIDATES
+" in
+    *"
+$value
+"*) return 0 ;;
+  esac
+  WARP_ENDPOINT_CANDIDATES="${WARP_ENDPOINT_CANDIDATES}${value}
+"
+}
+
+resolve_with_system_dns() {
+  local host="$1"
+  if command -v getent >/dev/null 2>&1; then
+    getent ahosts "$host" 2>/dev/null | awk '{print $1}' | sort -u
+    return 0
+  fi
+  if command -v nslookup >/dev/null 2>&1; then
+    nslookup "$host" 2>/dev/null | awk '/^Address: / {print $2}' | sort -u
+    return 0
+  fi
+  return 0
+}
+
+resolve_with_doh() {
+  local host="$1" type="$2"
+  command -v curl >/dev/null 2>&1 || return 0
+  curl --max-time 10 -fsSL "https://cloudflare-dns.com/dns-query?name=$host&type=$type" \
+    -H 'accept: application/dns-json' 2>/dev/null |
+    grep -o '"data"[[:space:]]*:[[:space:]]*"[^"]*"' |
+    sed 's/.*"data"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' |
+    sort -u || true
+}
+
+ip_family() {
+  case "$1" in
+    *:*) printf '6\n' ;;
+    *.*) printf '4\n' ;;
+    *) printf 'domain\n' ;;
+  esac
+}
+
+build_warp_endpoint_candidates() {
+  WARP_ENDPOINT_CANDIDATES=""
+  local host port ip
+  if [ -n "$WARP_ENDPOINT" ]; then
+    host="${WARP_ENDPOINT%:*}"
+    port="${WARP_ENDPOINT##*:}"
+  else
+    host="$WARP_PROFILE_ENDPOINT_HOST"
+    port="$WARP_PROFILE_ENDPOINT_PORT"
+  fi
+  host="${host#[}"
+  host="${host%]}"
+  [ -n "$port" ] || port="2408"
+
+  if [ "$(ip_family "$host")" = "6" ]; then
+    add_unique_candidate "$host" "$port"
+  fi
+
+  if [ "$(ip_family "$host")" = "domain" ]; then
+    for ip in $(resolve_with_system_dns "$host"); do
+      [ "$(ip_family "$ip")" = "6" ] && add_unique_candidate "$ip" "$port"
+    done
+    for ip in $(resolve_with_doh "$host" AAAA); do
+      add_unique_candidate "$ip" "$port"
+    done
+  fi
+
+  add_unique_candidate "2606:4700:d0::a29f:c001" "$port"
+  add_unique_candidate "2606:4700:d0::a29f:c008" "$port"
+
+  if [ "$(ip_family "$host")" = "4" ]; then
+    add_unique_candidate "$host" "$port"
+  fi
+
+  if [ "$(ip_family "$host")" = "domain" ]; then
+    for ip in $(resolve_with_system_dns "$host"); do
+      [ "$(ip_family "$ip")" = "4" ] && add_unique_candidate "$ip" "$port"
+    done
+    for ip in $(resolve_with_doh "$host" A); do
+      add_unique_candidate "$ip" "$port"
+    done
+  fi
+
+  add_unique_candidate "162.159.192.1" "$port"
+  add_unique_candidate "162.159.192.8" "$port"
+  add_unique_candidate "162.159.193.1" "$port"
+  add_unique_candidate "162.159.193.8" "$port"
+  add_unique_candidate "$host" "$port"
+}
+
+split_endpoint_candidate() {
+  local candidate="$1"
+  WARP_CANDIDATE_HOST="${candidate%%|*}"
+  WARP_CANDIDATE_PORT="${candidate##*|}"
+}
+
+write_wireguard_singbox_config() {
+  local path="$1" listen_port="$2" endpoint_host="$3" endpoint_port="$4" inbound_type="$5"
+  local escaped_host escaped_key escaped_pub listen_host
+  escaped_host="$(json_escape "$endpoint_host")"
+  escaped_key="$(json_escape "$WARP_PRIVATE_KEY")"
+  escaped_pub="$(json_escape "$WARP_PEER_PUBLIC_KEY")"
+  listen_host="$REDIRECT_LISTEN"
+  if [ "$inbound_type" = "mixed" ]; then
+    listen_host="127.0.0.1"
+  fi
+  mkdir -p "$(dirname "$path")"
+  cat >"$path" <<EOF
+{
+  "log": {
+    "level": "info"
+  },
+  "inbounds": [
+    {
+      "type": "$inbound_type",
+      "tag": "wg-warp-redirect",
+      "listen": "$listen_host",
+      "listen_port": $listen_port
+    }
+  ],
+  "endpoints": [
+    {
+      "type": "wireguard",
+      "tag": "warp-wireguard",
+      "system": false,
+      "name": "warppool-warp",
+      "mtu": $WARP_MTU,
+      "address": [
+        $WARP_ADDRESS_JSON
+      ],
+      "private_key": "$escaped_key",
+      "peers": [
+        {
+          "address": "$escaped_host",
+          "port": $endpoint_port,
+          "public_key": "$escaped_pub",
+          "allowed_ips": [
+            "0.0.0.0/0",
+            "::/0"
+          ],
+          "persistent_keepalive_interval": 25
+        }
+      ]
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "inbound": [
+          "wg-warp-redirect"
+        ],
+        "outbound": "warp-wireguard"
+      }
+    ],
+    "auto_detect_interface": true
+  }
+}
+EOF
+  chmod 0600 "$path"
+}
+
+verify_proxy_port_warp() {
+  local host="$1" port="$2"
+  local trace
+  require_command curl
+  trace="$(curl --max-time 20 --socks5-hostname "$host:$port" -fsSL https://www.cloudflare.com/cdn-cgi/trace || true)"
+  printf '%s\n' "$trace" | grep -q '^warp=on$'
+}
+
+probe_wireguard_backend() {
+  local candidate host port probe_config probe_log probe_pid
+  read_warp_profile
+  build_warp_endpoint_candidates
+  [ -n "$WARP_ENDPOINT_CANDIDATES" ] || fail "no WARP endpoint candidates available"
+
+  probe_config="$STATE_DIR/$SAFE_DEVICE.probe.json"
+  probe_log="$STATE_DIR/$SAFE_DEVICE.probe.log"
+  mkdir -p "$STATE_DIR"
+
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    split_endpoint_candidate "$candidate"
+    host="$WARP_CANDIDATE_HOST"
+    port="$WARP_CANDIDATE_PORT"
+    log "probing WARP WireGuard endpoint: $host:$port"
+    if [ "$DRY_RUN" = "true" ]; then
+      WARP_SELECTED_HOST="$host"
+      WARP_SELECTED_PORT="$port"
+      WARP_BACKEND_EFFECTIVE="wireguard"
+      log "dry-run: select WARP WireGuard endpoint $host:$port"
+      return 0
+    fi
+    write_wireguard_singbox_config "$probe_config" "$WARP_PROBE_PORT" "$host" "$port" "mixed"
+    ensure_singbox_config_supported "$probe_config"
+    "$SINGBOX_BIN" run -c "$probe_config" >"$probe_log" 2>&1 &
+    probe_pid="$!"
+    sleep 3
+    if verify_proxy_port_warp "127.0.0.1" "$WARP_PROBE_PORT"; then
+      kill "$probe_pid" >/dev/null 2>&1 || true
+      wait "$probe_pid" >/dev/null 2>&1 || true
+      rm -f "$probe_config" "$probe_log"
+      WARP_SELECTED_HOST="$host"
+      WARP_SELECTED_PORT="$port"
+      WARP_BACKEND_EFFECTIVE="wireguard"
+      log "WARP WireGuard endpoint verified: $host:$port"
+      return 0
+    fi
+    kill "$probe_pid" >/dev/null 2>&1 || true
+    wait "$probe_pid" >/dev/null 2>&1 || true
+    log "WARP WireGuard endpoint failed: $host:$port"
+  done <<EOF_CANDIDATES
+$WARP_ENDPOINT_CANDIDATES
+EOF_CANDIDATES
+
+  fail "WARP WireGuard endpoint probing failed; check IPv6 connectivity, UDP 2408 outbound, DNS resolution, or provider WARP restrictions"
+}
+
+select_warp_backend() {
+  case "$WARP_BACKEND" in
+    socks)
+      verify_warp_proxy
+      WARP_BACKEND_EFFECTIVE="socks"
+      ;;
+    wireguard)
+      probe_wireguard_backend
+      ;;
+    auto)
+      if [ "$VERIFY_WARP" = "true" ] && [ "$DRY_RUN" != "true" ] && verify_proxy_port_warp "$WARP_PROXY_HOST" "$WARP_PROXY_PORT"; then
+        log "using official WARP local SOCKS proxy: $WARP_PROXY_HOST:$WARP_PROXY_PORT"
+        WARP_BACKEND_EFFECTIVE="socks"
+      else
+        if [ "$VERIFY_WARP" != "true" ]; then
+          log "verification disabled; prefer official WARP SOCKS backend"
+          WARP_BACKEND_EFFECTIVE="socks"
+        else
+          if [ "$DRY_RUN" != "true" ] && [ ! -r "$WARP_PROFILE_PATH" ]; then
+            fail "official WARP local SOCKS proxy verification failed and WARP WireGuard profile is missing: $WARP_PROFILE_PATH"
+          fi
+          log "official WARP local SOCKS proxy unavailable; trying wgcf + sing-box WireGuard backend"
+          probe_wireguard_backend
+        fi
+      fi
+      ;;
+  esac
+}
+
 write_singbox_config() {
   if [ "$DRY_RUN" = "true" ]; then
     log "dry-run: write sing-box config: $CONFIG_PATH"
+    return 0
+  fi
+
+  if [ "${WARP_BACKEND_EFFECTIVE:-}" = "wireguard" ]; then
+    write_wireguard_singbox_config "$CONFIG_PATH" "$TRANSPARENT_PORT" "$WARP_SELECTED_HOST" "$WARP_SELECTED_PORT" "redirect"
     return 0
   fi
 
@@ -278,6 +677,10 @@ systemd_available() {
   command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
 }
 
+openrc_available() {
+  command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1 && [ -d /etc/init.d ]
+}
+
 start_singbox() {
   if systemd_available; then
     if [ "$DRY_RUN" = "true" ]; then
@@ -309,6 +712,48 @@ EOF
     return 0
   fi
 
+  if openrc_available; then
+    if [ "$DRY_RUN" = "true" ]; then
+      log "dry-run: write OpenRC service: $OPENRC_PATH"
+      log "dry-run: rc-update add $OPENRC_NAME default && rc-service $OPENRC_NAME restart"
+      return 0
+    fi
+    cat >"$OPENRC_PATH" <<EOF
+#!/sbin/openrc-run
+name="WarpPool WARP forward for $DEVICE"
+description="WarpPool WARP forward for $DEVICE"
+command="$SINGBOX_BIN"
+command_args="run -c $CONFIG_PATH"
+command_background="yes"
+pidfile="$PID_PATH"
+output_log="$LOG_PATH"
+error_log="$LOG_PATH"
+
+depend() {
+  need net
+  after firewall
+}
+
+start_pre() {
+  iptables -C INPUT -i $DEVICE -p tcp -j ACCEPT 2>/dev/null || iptables -A INPUT -i $DEVICE -p tcp -j ACCEPT
+  iptables -t nat -C PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT 2>/dev/null || iptables -t nat -A PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT
+}
+
+stop_post() {
+  while iptables -t nat -C PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT >/dev/null 2>&1; do
+    iptables -t nat -D PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT
+  done
+  while iptables -C INPUT -i $DEVICE -p tcp -j ACCEPT >/dev/null 2>&1; do
+    iptables -D INPUT -i $DEVICE -p tcp -j ACCEPT
+  done
+}
+EOF
+    chmod 0755 "$OPENRC_PATH"
+    rc-update add "$OPENRC_NAME" default >/dev/null 2>&1 || true
+    rc-service "$OPENRC_NAME" restart
+    return 0
+  fi
+
   if [ "$DRY_RUN" = "true" ]; then
     log "dry-run: start sing-box in background"
     return 0
@@ -334,6 +779,13 @@ stop_singbox() {
       rm -f "$UNIT_PATH"
       systemctl daemon-reload
     fi
+    return 0
+  fi
+
+  if openrc_available && [ -e "$OPENRC_PATH" ]; then
+    run rc-service "$OPENRC_NAME" stop >/dev/null 2>&1 || true
+    run rc-update del "$OPENRC_NAME" default >/dev/null 2>&1 || true
+    run rm -f "$OPENRC_PATH"
     return 0
   fi
 
@@ -364,7 +816,7 @@ delete_iptables_rules() {
 }
 
 status() {
-  log "device=$DEVICE client=$CLIENT_IP redirect_listen=$REDIRECT_LISTEN transparent_port=$TRANSPARENT_PORT warp_proxy=$WARP_PROXY_HOST:$WARP_PROXY_PORT"
+  log "device=$DEVICE client=$CLIENT_IP redirect_listen=$REDIRECT_LISTEN transparent_port=$TRANSPARENT_PORT backend=${WARP_BACKEND_EFFECTIVE:-$WARP_BACKEND} warp_proxy=$WARP_PROXY_HOST:$WARP_PROXY_PORT"
   if systemd_available; then
     systemctl is-active "$UNIT_NAME" 2>/dev/null || true
   elif [ -r "$PID_PATH" ]; then
@@ -381,7 +833,7 @@ main() {
   case "$ACTION" in
     up)
       resolve_singbox
-      verify_warp_proxy
+      select_warp_backend
       write_singbox_config
       start_singbox
       add_iptables_rules
@@ -395,6 +847,14 @@ main() {
       ;;
     status)
       status
+      ;;
+    probe)
+      resolve_singbox
+      select_warp_backend
+      log "WARP backend probe succeeded: ${WARP_BACKEND_EFFECTIVE:-$WARP_BACKEND}"
+      if [ "${WARP_BACKEND_EFFECTIVE:-}" = "wireguard" ]; then
+        log "selected WARP WireGuard endpoint: $WARP_SELECTED_HOST:$WARP_SELECTED_PORT"
+      fi
       ;;
   esac
 }
