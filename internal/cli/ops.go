@@ -101,33 +101,38 @@ func newPingCommandWithChecks(httpCheck func(string, string, time.Duration) (str
 				if nodeUsesSystemWireGuard(node) {
 					target := hostOnly(node.WGServerAddress)
 					if target == "" {
-						fmt.Fprintf(cmd.OutOrStdout(), "%s: missing wg_server_address\n", node.Name)
+						fmt.Fprintf(cmd.OutOrStdout(), "%s\n", tr(language, node.Name+": missing wg_server_address", node.Name+"：缺少 wg_server_address"))
 						continue
 					}
-					fmt.Fprintf(cmd.OutOrStdout(), "mode: system wireguard ping (%s)\n", target)
+					fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(language, "check mode:", "检测模式："), fmt.Sprintf("%s (%s)", tr(language, "system WireGuard ping", "系统 WireGuard ping"), target))
 					out, err := icmpCheck(target, count, timeout)
 					if strings.TrimSpace(out) != "" {
 						fmt.Fprintln(cmd.OutOrStdout(), strings.TrimSpace(out))
 					}
 					if err != nil {
-						fmt.Fprintf(cmd.OutOrStdout(), "ping failed: %v\n", err)
+						fmt.Fprintf(cmd.OutOrStdout(), "%s %v\n", tr(language, "ping failed:", "ping 检测失败："), err)
 					}
 					continue
 				}
 
 				proxyURL := nodeProxyURL(node)
 				if proxyURL == "" {
-					fmt.Fprintln(cmd.OutOrStdout(), "proxy check skipped: missing local proxy address")
+					fmt.Fprintln(cmd.OutOrStdout(), tr(language, "proxy check skipped: missing local proxy address", "代理检测已跳过：缺少本地代理地址"))
 					continue
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "mode: sing-box embedded wireguard proxy check (%s)\n", proxyURL)
+				fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(language, "check mode:", "检测模式："), fmt.Sprintf("%s (%s)", tr(language, "sing-box embedded WireGuard proxy check", "sing-box 内置 WireGuard 代理检测"), proxyURL))
 				body, usedURL, elapsed, err := fetchTextWithFallback(checkURLs, proxyURL, timeout, httpCheck)
 				if err != nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "proxy check failed: %v\n", err)
+					fmt.Fprintf(cmd.OutOrStdout(), "%s %v\n", tr(language, "proxy check failed:", "代理检测失败："), err)
 					continue
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "proxy check url: %s\n", usedURL)
-				fmt.Fprintf(cmd.OutOrStdout(), "proxy check ok: %s (latency: %s)\n", strings.TrimSpace(body), formatDuration(elapsed))
+				fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", tr(language, "proxy check url:", "代理检测地址："), usedURL)
+				fmt.Fprintf(cmd.OutOrStdout(), "%s %s (%s %s)\n",
+					tr(language, "proxy check ok:", "代理检测通过："),
+					strings.TrimSpace(body),
+					tr(language, "latency:", "延迟："),
+					formatDuration(elapsed),
+				)
 			}
 			return nil
 		},
@@ -168,7 +173,7 @@ func printNodePublicLatency(out io.Writer, language string, node config.Node, co
 		fmt.Fprintln(out, tr(language, "node latency skipped: missing public endpoint", "节点延迟检测已跳过：缺少公网端点"))
 		return
 	}
-	fmt.Fprintf(out, "%s %s\n", tr(language, "node public endpoint:", "节点公网地址："), target)
+	fmt.Fprintf(out, "%s %s\n", tr(language, "node latency target:", "节点延迟检测地址："), target)
 	pingOutput, err := icmpCheck(target, count, timeout)
 	avg := pingAverageLatency(pingOutput)
 	if err != nil {

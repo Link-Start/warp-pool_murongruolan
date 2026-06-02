@@ -519,6 +519,25 @@ download_and_install_warppool() {
   fi
 }
 
+install_command_aliases() {
+  local target alias_path
+  target="$INSTALL_DIR/warppool"
+  alias_path="$INSTALL_DIR/wpl"
+
+  if [ "$DRY_RUN" = "true" ]; then
+    log_i "dry-run: create command alias $alias_path -> $target" "dry-run：创建命令别名 $alias_path -> $target"
+    return 0
+  fi
+
+  if [ -e "$alias_path" ] && [ ! -L "$alias_path" ]; then
+    log_i "warning: command alias $alias_path already exists and is not a symlink; keeping existing file" "警告：命令别名 $alias_path 已存在且不是软链接，已保留原文件"
+    return 0
+  fi
+
+  ln -sf "$target" "$alias_path"
+  log_i "installed command alias: $alias_path -> $target" "已安装命令别名：$alias_path -> $target"
+}
+
 install_singbox() {
   local script="$LIB_DIR/assets/singbox_install.sh"
   if [ "$DRY_RUN" = "true" ]; then
@@ -640,6 +659,7 @@ main() {
   log_i "selected listener: $LISTEN_HOST:$LISTEN_PORT" "已选择监听地址：$LISTEN_HOST:$LISTEN_PORT"
 
   download_and_install_warppool
+  install_command_aliases
   install_singbox
   initialize_config
   create_systemd_services

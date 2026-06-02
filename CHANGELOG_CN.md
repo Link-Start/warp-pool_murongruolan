@@ -1,5 +1,13 @@
 # 更新日志
 
+## v0.1.10
+
+- 新增短命令 `wpl`，等效于 `warppool`，例如 `wpl node list`、`wpl ping nat01`。
+- 新增子节点卸载短命令 `wpl-node-uninstall`，等效于 `warppool-node-uninstall`。
+- 优化 `warppool ping` 中文输出，将“节点公网地址”调整为更准确的“节点延迟检测地址”。
+- 修复中文模式下 `warppool ping` 仍混入英文 `mode`、`proxy check ok` 等提示的问题。
+- 增强卸载安全性：主服务器卸载只会删除指向 WarpPool 的 `wpl` 软链接，不会误删其他程序占用的同名文件。
+
 ## v0.1.9
 
 - 新增 Alpine WARP 支持，基于 `wgcf` 生成 WireGuard 配置，并通过 sing-box 内置 WireGuard endpoint 出口。
@@ -14,7 +22,7 @@
 - 修复轻量依赖调整后 WARP 安装缺少 `gpg` 的问题；仅在 WARP 模式需要 Cloudflare apt 仓库时安装 `gpg`。
 - 放宽小硬盘 NAT VPS 的 WARP 磁盘预检：硬盘低于推荐空间但高于硬性最低空间时只提示风险，不再过早阻止安装。
 - `warppool node mode --method ssh` 会复用 Push 部署时保存的非敏感 SSH 默认值。SSH 密码不会保存。
-- `warppool ping` 新增节点公网延迟、主服务器直连 HTTP 延迟、代理出口 IP 和代理 HTTP 延迟检测，并支持多个 HTTP 检测地址兜底。
+- `warppool ping` 新增节点延迟检测地址 RTT、主服务器直连 HTTP 延迟、代理出口 IP 和代理 HTTP 延迟检测，并支持多个 HTTP 检测地址兜底。
 
 ## v0.1.5
 

@@ -51,7 +51,7 @@ func TestPingCommandUsesProxyCheckForEmbeddedWireGuard(t *testing.T) {
 	}
 
 	text := out.String()
-	for _, want := range []string{"mode: sing-box embedded wireguard proxy check", "proxy check ok: 204.197.163.238"} {
+	for _, want := range []string{"check mode: sing-box embedded WireGuard proxy check", "proxy check ok: 204.197.163.238"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in:\n%s", want, text)
 		}
@@ -173,6 +173,70 @@ func TestPingCommandHTTPFallbackAndLatency(t *testing.T) {
 	}
 	if len(calls) != 4 {
 		t.Fatalf("expected direct+proxy fallback calls, got %d: %#v", len(calls), calls)
+	}
+}
+
+func TestPingCommandUsesChineseLabelsWhenConfigured(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := config.Default()
+	cfg.Language = "zh"
+	cfg.Nodes = []config.Node{
+		{
+			Name:            "NAT1",
+			ExitMode:        config.ExitModeDirect,
+			Proxy:           config.ProxyMixed,
+			BindHost:        "127.0.0.1",
+			LocalPort:       10022,
+			PublicIP:        "204.197.163.238",
+			WGServerAddress: "10.200.0.1/30",
+			WGClientAddress: "10.200.0.2/30",
+			Endpoint:        "204.197.163.238:41704",
+		},
+	}
+	if err := config.Save(path, cfg, true); err != nil {
+		t.Fatal(err)
+	}
+
+	oldConfigPath := configPath
+	configPath = path
+	t.Cleanup(func() { configPath = oldConfigPath })
+
+	var out bytes.Buffer
+	cmd := newPingCommandWithChecks(
+		func(rawURL string, proxyURL string, timeout time.Duration) (string, error) {
+			if proxyURL == "" {
+				return "47.83.126.121", nil
+			}
+			return "104.28.201.73", nil
+		},
+		func(target string, count int, timeout time.Duration) (string, error) {
+			return "rtt min/avg/max/mdev = 100.000/154.724/200.000/1.000 ms", nil
+		},
+	)
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"NAT1"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	text := out.String()
+	for _, want := range []string{
+		"节点延迟检测地址： 204.197.163.238",
+		"节点平均延迟： 154.724 ms",
+		"主服务器直连 HTTP 检测地址： https://api.ipify.org",
+		"主服务器直连 HTTP 检测通过： 47.83.126.121",
+		"检测模式： sing-box 内置 WireGuard 代理检测",
+		"代理检测地址： https://api.ipify.org",
+		"代理检测通过： 104.28.201.73",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
+		}
+	}
+	for _, unexpected := range []string{"node public endpoint", "mode:", "proxy check url:", "proxy check ok:"} {
+		if strings.Contains(text, unexpected) {
+			t.Fatalf("unexpected English label %q in:\n%s", unexpected, text)
+		}
 	}
 }
 

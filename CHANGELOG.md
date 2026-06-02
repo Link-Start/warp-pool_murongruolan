@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.10
+
+- Added the short command alias `wpl`, equivalent to `warppool`, for example `wpl node list` and `wpl ping nat01`.
+- Added the node-side short uninstaller command `wpl-node-uninstall`, equivalent to `warppool-node-uninstall`.
+- Improved `warppool ping` Chinese output by renaming the node address label to the clearer node latency target address.
+- Fixed English `mode` / `proxy check ok` style messages appearing in `warppool ping` when Chinese language is selected.
+- Improved uninstall safety: the main-server uninstall flow only removes `/usr/local/bin/wpl` when it is a symlink pointing to WarpPool, avoiding accidental removal of another program.
+
 ## v0.1.9
 
 - Added Alpine WARP support based on `wgcf` generated WireGuard profiles and sing-box embedded WireGuard endpoints.
@@ -14,7 +22,7 @@
 - Fixed WARP installation after lightweight dependency changes by installing `gpg` only when WARP mode needs the Cloudflare apt repository.
 - Relaxed WARP disk preflight for small NAT VPS nodes: low disk space now shows a warning when it is above the hard minimum instead of blocking too early.
 - `warppool node mode --method ssh` now reuses saved non-sensitive SSH defaults from Push deployment. SSH passwords are never saved.
-- `warppool ping` now reports node public endpoint latency, main-server direct HTTP latency, proxy egress IP, and proxy HTTP latency, with multiple fallback check URLs.
+- `warppool ping` now reports node latency target RTT, main-server direct HTTP latency, proxy egress IP, and proxy HTTP latency, with multiple fallback check URLs.
 
 ## v0.1.5
 

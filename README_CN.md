@@ -145,6 +145,8 @@ wget -qO- ···
 
 安装时选择的语言会写入 WarpPool 配置。后续 `warppool deploy`、`warppool deploy-token`、`warppool uninstall` 等交互命令会使用同一种语言。
 
+安装完成后，也可以使用短命令 `wpl`，它等效于 `warppool`，例如 `wpl node list`、`wpl ping nat01`。如果 `/usr/local/bin/wpl` 已经被其他程序占用，安装脚本不会覆盖，只会保留 `warppool` 主命令可用。
+
 
 非交互安装
 
@@ -324,6 +326,15 @@ warppool remove nat01 # 移除节点nat01 仅移除记录
 warppool node remove nat01 --clean-wg # 移除节点nat01 并WG删除客户端配置
 ```
 
+短命令示例：
+
+```bash
+wpl node list
+wpl node show nat01
+wpl ping nat01
+wpl upgrade --yes
+```
+
 `warppool node mode` 默认使用 Pull 方式生成一条需要在出口节点执行的命令。出口节点会自动检测 WARP：已安装则复用，未安装则自动安装。也可以指定：
 
 ```bash
@@ -368,7 +379,7 @@ warppool export clash -o clash.yaml # 导出Clash兼容配置
 ```bash
 warppool version # 查看版本信息
 warppool doctor # 检查本机运行环境和端口状态
-warppool ping nat01 # 测试节点公网延迟、主服务器直连HTTP延迟、代理出口IP和代理延迟
+warppool ping nat01 # 测试节点延迟检测地址、主服务器直连HTTP延迟、代理出口IP和代理延迟
 warppool speedtest --proxy http://127.0.0.1:10133 # 通过指定代理进行简易测速
 warppool upgrade --yes # 更新主程序二进制和安装脚本资源
 ```
@@ -412,16 +423,22 @@ Push 部署会在出口节点安装一个辅助命令：
 warppool-node-uninstall
 ```
 
+如果短命令没有被其他程序占用，也会安装：
+
+```bash
+wpl-node-uninstall
+```
+
 在出口节点上常用：
 
 ```bash
-warppool-node-uninstall device=wpnat01 # 卸载指定WarpPool WireGuard设备
-warppool-node-uninstall all=true # 卸载本节点所有WarpPool WireGuard设备
-warppool-node-uninstall all=true remove_warp=true # 同时卸载/清理WARP运行时
-warppool-node-uninstall all=true remove_wireguard=true # 同时卸载WireGuard软件包
+wpl-node-uninstall device=wpnat01 # 卸载指定WarpPool WireGuard设备
+wpl-node-uninstall all=true # 卸载本节点所有WarpPool WireGuard设备
+wpl-node-uninstall all=true remove_warp=true # 同时卸载/清理WARP运行时
+wpl-node-uninstall all=true remove_wireguard=true # 同时卸载WireGuard软件包
 ```
 
-如果 `/etc/wireguard/wp*.conf` 只有一个配置文件，可以直接执行 `warppool-node-uninstall`。如果存在多个 WarpPool 设备，需要传 `device=<wg-device>` 或 `all=true`。
+如果 `/etc/wireguard/wp*.conf` 只有一个配置文件，可以直接执行 `wpl-node-uninstall`。如果存在多个 WarpPool 设备，需要传 `device=<wg-device>` 或 `all=true`。长命令 `warppool-node-uninstall` 仍然保留，用于兼容。
 
 如果是 Pull 安装且节点上没有该辅助命令，可以直接执行：
 
