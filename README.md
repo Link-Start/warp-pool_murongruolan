@@ -403,8 +403,9 @@ warppool node status nat01 # Show node nat01 runtime status
 warppool node mode nat01 warp # Switch nat01 to WARP egress; auto-detect and install/reuse WARP
 warppool node mode nat01 direct # Switch nat01 back to direct egress
 warppool deploy --exit-mode dual # Deploy a new node with both direct and WARP ports
-warppool remove nat01 # Remove node nat01 record only
-warppool node remove nat01 --clean-wg # Remove node nat01 and delete local WG client config
+warppool remove nat01 # Remove nat01, confirm first, refresh/stop local proxy, and clean local WG client config
+warppool node remove nat01 -y # Remove nat01 without confirmation
+warppool node remove nat01 --clean-wg=false # Remove node and refresh local proxy, but keep local WG client config
 ```
 
 Short alias examples:
@@ -416,7 +417,7 @@ wpl ping nat01
 wpl upgrade --yes
 ```
 
-`remove` only removes the node record. Add `--clean-wg` when you also want to stop and delete the local WireGuard client config on the main server.
+`warppool node remove` / `wpl node remove` prints the selected node details first and asks for `y/N` confirmation, defaulting to `N`. After confirmation, it removes the node from config and rewrites/restarts the local proxy. If no nodes remain, it stops the local proxy and removes the stale sing-box config so the local proxy port is released.
 
 `warppool node mode` defaults to Pull mode and prints a command to run on the exit node. The exit node detects WARP automatically: reuse it when already installed, otherwise install it. Advanced options:
 

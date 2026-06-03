@@ -6,6 +6,8 @@
 - `warppool deploy` / `warppool deploy-token` 支持选择 `dual/direct+warp`，并对两个本地端口做占用检测。
 - `warppool ping` 在 dual 模式下会分别检测 direct 和 WARP 两个代理端口。
 - Clash 导出会为 dual 节点生成 direct 和 WARP 两个代理条目。
+- 修复 `warppool node remove` / `wpl node remove` 只删除节点记录但不刷新本地代理，导致端口继续被占用的问题。
+- `node remove` 现在会先输出所选节点信息，并要求 `y/N` 确认，默认 `N`；确认后会刷新/停止本地代理并默认清理本地 WireGuard 客户端配置。
 
 ## v0.1.10
 

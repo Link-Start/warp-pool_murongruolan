@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -124,5 +125,94 @@ func TestNodeSSHHostDefault(t *testing.T) {
 func TestEndpointHostIPv6(t *testing.T) {
 	if got := endpointHost("[2001:db8::1]:51820"); got != "2001:db8::1" {
 		t.Fatalf("unexpected ipv6 endpoint host: %s", got)
+	}
+}
+
+func TestNodeRemoveDefaultNoCancels(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := config.Default()
+	cfg.Language = "zh"
+	cfg.Nodes = []config.Node{
+		{
+			Name:      "nat1",
+			ExitMode:  config.ExitModeDirect,
+			Proxy:     config.ProxyMixed,
+			BindHost:  "127.0.0.1",
+			LocalPort: 10013,
+			PublicIP:  "203.0.113.10",
+			Endpoint:  "203.0.113.10:51820",
+		},
+	}
+	if err := config.Save(path, cfg, true); err != nil {
+		t.Fatal(err)
+	}
+
+	oldConfigPath := configPath
+	oldInput := inputReader
+	configPath = path
+	inputReader = bytes.NewBufferString("\n")
+	t.Cleanup(func() {
+		configPath = oldConfigPath
+		inputReader = oldInput
+	})
+
+	var out bytes.Buffer
+	cmd := newNodeRemoveCommand()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"nat1", "--skip-proxy-refresh", "--clean-wg=false"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{"将要移除的节点：", "节点名称:", "nat1", "127.0.0.1:10013", "[y/N]", "已取消移除节点"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
+		}
+	}
+	after, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := config.FindNode(after, "nat1"); !ok {
+		t.Fatal("node should remain after default-N confirmation")
+	}
+}
+
+func TestNodeRemoveYesDeletesRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := config.Default()
+	cfg.Nodes = []config.Node{
+		{
+			Name:      "nat1",
+			ExitMode:  config.ExitModeDirect,
+			Proxy:     config.ProxyMixed,
+			BindHost:  "127.0.0.1",
+			LocalPort: 10013,
+		},
+	}
+	if err := config.Save(path, cfg, true); err != nil {
+		t.Fatal(err)
+	}
+
+	oldConfigPath := configPath
+	configPath = path
+	t.Cleanup(func() { configPath = oldConfigPath })
+
+	var out bytes.Buffer
+	cmd := newNodeRemoveCommand()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"nat1", "-y", "--skip-proxy-refresh", "--clean-wg=false"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := config.FindNode(after, "nat1"); ok {
+		t.Fatal("node should be removed after -y")
+	}
+	if !strings.Contains(out.String(), "removed node: nat1") {
+		t.Fatalf("missing removal output:\n%s", out.String())
 	}
 }

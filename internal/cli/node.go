@@ -738,7 +738,9 @@ func safeFilePart(value string) string {
 }
 
 func newNodeRemoveCommand() *cobra.Command {
-	var cleanWG bool
+	cleanWG := true
+	var yes bool
+	var skipProxyRefresh bool
 
 	cmd := &cobra.Command{
 		Use:     "remove <name>",
@@ -755,6 +757,20 @@ func newNodeRemoveCommand() *cobra.Command {
 			node, ok := config.FindNode(cfg, args[0])
 			if !ok {
 				return fmt.Errorf("node not found: %s", args[0])
+			}
+
+			language := cfgLanguage(cfg)
+			if err := printNodeRemoveSummary(cmd.OutOrStdout(), language, node); err != nil {
+				return err
+			}
+			prompt := newPromptIOWithLanguage(cmd.OutOrStdout(), language)
+			confirmed, err := prompt.askConfirmDefaultNo(tr(language, "Confirm node removal?", "确认移除此节点？"), yes)
+			if err != nil {
+				return err
+			}
+			if !confirmed {
+				fmt.Fprintln(cmd.OutOrStdout(), tr(language, "node removal cancelled", "已取消移除节点"))
+				return nil
 			}
 
 			if cleanWG {
@@ -776,11 +792,24 @@ func newNodeRemoveCommand() *cobra.Command {
 				return fmt.Errorf("save config: %w", err)
 			}
 
+			if !skipProxyRefresh {
+				logs, err := refreshLocalProxyAfterNodeRemove(path, cfg)
+				for _, log := range logs {
+					fmt.Fprintln(cmd.OutOrStdout(), log)
+				}
+				if err != nil {
+					return err
+				}
+			}
+
 			fmt.Fprintf(cmd.OutOrStdout(), "removed node: %s\n", removed.Name)
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&cleanWG, "clean-wg", false, "also stop and remove local WireGuard client config for this node")
+	cmd.Flags().BoolVar(&cleanWG, "clean-wg", true, "stop and remove local WireGuard client config for this node")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "confirm node removal without prompting")
+	cmd.Flags().BoolVar(&skipProxyRefresh, "skip-proxy-refresh", false, "skip refreshing local proxy after removal")
+	_ = cmd.Flags().MarkHidden("skip-proxy-refresh")
 	return cmd
 }
 
@@ -794,6 +823,10 @@ func newRemoveCommand() *cobra.Command {
 func removeLocalNodeWG(node config.Node) (uninstallResult, error) {
 	opts := uninstallDefaults(uninstallOptions{CleanWG: true, CleanWGSet: true, SkipInteractive: true})
 	result := uninstallResult{}
+	if strings.TrimSpace(node.WGLocalConfigPath) == "" && strings.TrimSpace(node.WGLocalDevice) == "" {
+		result.append("no local WireGuard client config recorded for node: " + node.Name)
+		return result, nil
+	}
 	if err := wgDownBestEffort(node, opts, &result); err != nil {
 		return result, err
 	}
@@ -810,6 +843,119 @@ func removeLocalNodeWG(node config.Node) (uninstallResult, error) {
 		}
 	}
 	return result, nil
+}
+
+func printNodeRemoveSummary(out interface{ Write([]byte) (int, error) }, language string, node config.Node) error {
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, tr(language, "Selected node to remove:", "将要移除的节点："))
+	printNodeField(w, language, "name", "节点名称", node.Name)
+	printNodeField(w, language, "exit_mode", "出口模式", node.ExitMode)
+	if node.ExitMode == config.ExitModeDual {
+		printNodeField(w, language, "direct_listen", "直连本地代理监听", fmt.Sprintf("%s:%d", node.BindHost, node.LocalPort))
+		printNodeField(w, language, "warp_listen", "WARP 本地代理监听", fmt.Sprintf("%s:%d", node.BindHost, node.WarpLocalPort))
+	} else {
+		printNodeField(w, language, "listen", "本地代理监听", fmt.Sprintf("%s:%d", node.BindHost, node.LocalPort))
+	}
+	printNodeField(w, language, "public_ip", "公网IP", node.PublicIP)
+	printNodeField(w, language, "endpoint", "WireGuard 公网端点", node.Endpoint)
+	printNodeField(w, language, "wg_device", "远端 WireGuard 设备", node.WGDevice)
+	return w.Flush()
+}
+
+func refreshLocalProxyAfterNodeRemove(configPath string, cfg config.Config) ([]string, error) {
+	var logs []string
+	proxyRunning := localProxyRuntimeRunning()
+
+	if len(cfg.Nodes) == 0 {
+		if proxyRunning {
+			if err := stopLocalProxyRuntime(); err != nil {
+				return logs, err
+			}
+			logs = append(logs, "stopped local proxy service; no nodes remain")
+		} else {
+			logs = append(logs, "local proxy service is not running")
+		}
+		if err := removeSingBoxConfigIfExists(); err != nil {
+			return logs, err
+		}
+		logs = append(logs, "removed stale local proxy config")
+		return logs, nil
+	}
+
+	data, err := buildProxyConfig(cfg, singbox.Options{}, proxyConfigRestart, nil)
+	if err != nil {
+		return logs, err
+	}
+	if err := singbox.WriteConfig(singbox.DefaultConfigPath(), data); err != nil {
+		return logs, fmt.Errorf("write sing-box config: %w", err)
+	}
+	logs = append(logs, "updated local proxy config")
+
+	if !proxyRunning {
+		logs = append(logs, "local proxy service is not running; config updated only")
+		return logs, nil
+	}
+	if err := restartLocalProxyRuntime(configPath); err != nil {
+		return logs, err
+	}
+	logs = append(logs, "restarted local proxy service")
+	return logs, nil
+}
+
+func localProxyRuntimeRunning() bool {
+	status, err := singbox.Status(singbox.ManagerOptions{})
+	if err == nil && status.Running {
+		return true
+	}
+	if runtime.GOOS == "linux" {
+		return runSystemctl("is-active", "--quiet", "warppool-proxy.service") == nil
+	}
+	return false
+}
+
+func stopLocalProxyRuntime() error {
+	if runtime.GOOS == "linux" {
+		serviceErr := stopProxyService()
+		if status, err := singbox.Stop(singbox.ManagerOptions{}); err == nil {
+			if serviceErr == nil || status.Message == "stopped sing-box" {
+				return nil
+			}
+		}
+		return serviceErr
+	}
+	_, err := singbox.Stop(singbox.ManagerOptions{})
+	return err
+}
+
+func restartLocalProxyRuntime(configPath string) error {
+	if runtime.GOOS == "linux" {
+		if status, err := singbox.Stop(singbox.ManagerOptions{}); err != nil && status.Running {
+			return err
+		}
+		return startProxyService(configPath, nil)
+	}
+	status, err := singbox.Stop(singbox.ManagerOptions{})
+	if err != nil && status.Running {
+		return err
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	data, err := buildAndValidateProxyConfig(cfg, singbox.Options{})
+	if err != nil {
+		return err
+	}
+	_, err = singbox.Start(data, singbox.ManagerOptions{})
+	return err
+}
+
+func removeSingBoxConfigIfExists() error {
+	path := singbox.DefaultConfigPath()
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove sing-box config %s: %w", path, err)
+	}
+	return nil
 }
 
 func resolvedConfigPath() string {

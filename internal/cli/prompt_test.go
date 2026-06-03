@@ -73,6 +73,25 @@ func TestPromptBoolDefaultAndSelection(t *testing.T) {
 	}
 }
 
+func TestPromptConfirmDefaultNo(t *testing.T) {
+	var out bytes.Buffer
+	p := promptIO{in: bufio.NewReader(bytes.NewBufferString("\ny\n")), out: &out}
+	first, err := p.askConfirmDefaultNo("remove node", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := p.askConfirmDefaultNo("remove node", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first || !second {
+		t.Fatalf("unexpected confirm results: %v %v", first, second)
+	}
+	if !bytes.Contains(out.Bytes(), []byte("[y/N]")) {
+		t.Fatalf("missing y/N prompt: %s", out.String())
+	}
+}
+
 func TestPromptChineseMenuAndRequiredIntMessages(t *testing.T) {
 	var out bytes.Buffer
 	input := bufio.NewReader(bytes.NewBufferString("x\n2\n\n12345\n"))

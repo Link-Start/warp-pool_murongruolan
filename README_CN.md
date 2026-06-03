@@ -373,8 +373,9 @@ warppool node status nat01 # 查看节点nat01运行状态
 warppool node mode nat01 warp # 将节点nat01切换为WARP出口，默认自动检测并安装/复用WARP
 warppool node mode nat01 direct # 将节点nat01切换回直连出口
 warppool deploy --exit-mode dual # 新部署一个同时提供 direct 和 WARP 端口的节点
-warppool remove nat01 # 移除节点nat01 仅移除记录
-warppool node remove nat01 --clean-wg # 移除节点nat01 并WG删除客户端配置
+warppool remove nat01 # 移除节点nat01，默认会确认、刷新/停止本地代理并清理本地WG客户端配置
+warppool node remove nat01 -y # 跳过确认直接移除节点
+warppool node remove nat01 --clean-wg=false # 仅移除节点并刷新本地代理，保留本地WG客户端配置
 ```
 
 短命令示例：
@@ -385,6 +386,8 @@ wpl node show nat01
 wpl ping nat01
 wpl upgrade --yes
 ```
+
+`warppool node remove` / `wpl node remove` 会先输出将要移除的节点信息，并要求输入 `y/N` 确认，默认 `N`。确认后会从配置中删除节点、重写并重启本地代理；如果已经没有剩余节点，则停止本地代理并移除旧的 sing-box 配置，从而释放本地代理端口。
 
 `warppool node mode` 默认使用 Pull 方式生成一条需要在出口节点执行的命令。出口节点会自动检测 WARP：已安装则复用，未安装则自动安装。也可以指定：
 

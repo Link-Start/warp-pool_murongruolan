@@ -6,6 +6,8 @@
 - `warppool deploy` and `warppool deploy-token` can select `dual/direct+warp` and validate both local ports.
 - `warppool ping` checks both direct and WARP proxy ports for dual nodes.
 - Clash export emits separate direct and WARP proxy entries for dual nodes.
+- Fixed `warppool node remove` / `wpl node remove` removing only the node record without refreshing the local proxy, which left proxy ports occupied.
+- `node remove` now prints the selected node details and asks for `y/N` confirmation, defaulting to `N`; after confirmation it refreshes/stops the local proxy and cleans local WireGuard client config by default.
 
 ## v0.1.10
 
