@@ -8,6 +8,8 @@
 - Clash export emits separate direct and WARP proxy entries for dual nodes.
 - Fixed `warppool node remove` / `wpl node remove` removing only the node record without refreshing the local proxy, which left proxy ports occupied.
 - `node remove` now prints the selected node details and asks for `y/N` confirmation, defaulting to `N`; after confirmation it refreshes/stops the local proxy and cleans local WireGuard client config by default.
+- Added IPv6-only exit node support for `direct` mode: IPv6 WireGuard endpoints are bracketed automatically, IPv6 tunnel addresses are generated, and node-side direct forwarding now enables IPv6 forwarding plus `ip6tables` MASQUERADE.
+- Pull/Deploy Token install scripts now format literal IPv6 main-server URLs correctly and prefer IPv6-capable endpoint detection.
 
 ## v0.1.10
 

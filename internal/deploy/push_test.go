@@ -230,10 +230,12 @@ func TestInstallRemoteNodeUninstallerCommandPathEscapesRemoteDir(t *testing.T) {
 func TestNodeModeSSHCommandIncludesMetadata(t *testing.T) {
 	command := nodeModeSSHCommand(ModeSwitchOptions{
 		Node: config.Node{
-			Name:            "nat1",
-			WGDevice:        "wpnat1",
-			WGServerAddress: "10.200.0.1/30",
-			WGClientAddress: "10.200.0.2/30",
+			Name:                "nat1",
+			WGDevice:            "wpnat1",
+			WGServerAddress:     "10.200.0.1/30",
+			WGClientAddress:     "10.200.0.2/30",
+			WGServerIPv6Address: "fd7a:7761:7270::1/126",
+			WGClientIPv6Address: "fd7a:7761:7270::2/126",
 		},
 		TargetMode:  config.ExitModeWarp,
 		RemoteDir:   "/tmp/custom dir",
@@ -247,6 +249,8 @@ func TestNodeModeSSHCommandIncludesMetadata(t *testing.T) {
 		"'device=wpnat1'",
 		"'client_addr=10.200.0.2/30'",
 		"'server_addr=10.200.0.1/30'",
+		"'client_ipv6_addr=fd7a:7761:7270::2/126'",
+		"'server_ipv6_addr=fd7a:7761:7270::1/126'",
 		"'warp_install=reuse'",
 		"'lang=en'",
 	} {

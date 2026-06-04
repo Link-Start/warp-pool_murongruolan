@@ -190,6 +190,16 @@ WireGuard ports are split into two values:
 
 Push mode asks for the SSH port, the node-side WireGuard listen port, and the public WireGuard mapped port. NAT nodes commonly use non-standard SSH and UDP mapped ports, so enter the real forwarded ports from your provider.
 
+IPv6-only exit nodes are supported for `direct` mode when the main server can reach the node over IPv6. Enter bare IPv6 addresses in interactive fields:
+
+```text
+SSH host/IP: 2001:db8::10
+WireGuard public endpoint host/IP: 2001:db8::10
+WireGuard public endpoint port: 51820
+```
+
+WarpPool automatically writes the WireGuard endpoint as `[2001:db8::10]:51820` and adds an IPv6 ULA address pair to the tunnel. The exit node enables IPv6 forwarding and `ip6tables` MASQUERADE for direct IPv6 egress. If the main server registration listener itself uses a literal IPv6 address, generated URLs use `http://[IPv6]:port`; using an AAAA domain is still recommended for easier operation.
+
 By default, SSH host key verification is enabled. If the default `known_hosts` file does not exist during interactive deployment, WarpPool asks whether to skip SSH HostKey verification for this deployment. For non-interactive deployment or temporary tests, pass:
 
 ```bash
@@ -339,9 +349,11 @@ wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/i
 The script enters a manual setup menu:
 
 1. Enter the main server IP/domain. Press Enter to install node dependencies only.
-2. If a main server address is entered, enter the registration port. IPv4 defaults to `8080`; domains default to `80`.
+2. If a main server address is entered, enter the registration port. IPv4/IPv6 literals default to `8080`; domains default to `80`.
 3. Enter a Deploy Token if auto registration is needed.
 4. For auto registration, enter the node-side WireGuard listen port and the public UDP port used by the main server.
+
+For IPv6-only exit nodes, manually enter the node's public IPv6 when asked for the WireGuard public endpoint. Do not include brackets in the prompt; the installer and server format the endpoint automatically.
 
 If the main server IP or Deploy Token is left empty, the script only installs node dependencies. It will not write WireGuard config and will not create a node record on the main server. You can later run `warppool deploy-token` on the main server and execute the generated one-line command on the node.
 
@@ -359,6 +371,12 @@ For auto registration, normally use the command printed by `warppool deploy-toke
 
 ```bash
 wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- token=<token> server=http://<main-server-ip>:8080
+```
+
+If the main server is reached by literal IPv6, use bracketed URL syntax:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- token=<token> server=http://[2001:db8::1]:8080
 ```
 
 The node first reads the exit mode stored in the Deploy Token from the main server, then decides whether WARP should be installed.
@@ -384,7 +402,7 @@ The command asks for node name, exit mode, proxy protocol, and local proxy port.
 To avoid duplicate configuration, Deploy Token uses these sources of truth:
 
 - Main server: node name, exit mode, proxy protocol, local proxy port; in dual mode, also the WARP local proxy port.
-- Exit node: node-side WireGuard listen port, auto-detected or manually entered public endpoint, and NAT-mapped public UDP port.
+- Exit node: node-side WireGuard listen port, auto-detected or manually entered public endpoint, and NAT-mapped public UDP port. For IPv6-only nodes, enter the public IPv6 as the endpoint host/IP.
 
 For NAT VPS nodes where the public UDP mapping differs from the node-side WireGuard listen port, run the generated install command on the exit node and enter the provider-mapped public UDP port when prompted.
 

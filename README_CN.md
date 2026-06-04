@@ -174,6 +174,16 @@ WireGuard 端口分两类：
 - `wg-listen-port`：出口节点本机 WireGuard 监听端口，默认 `51820`。
 - `wg-endpoint-port`：主服务器连接出口节点时使用的公网端口。NAT VPS 做端口转发时，这个端口通常和节点本机监听端口不同。
 
+纯 IPv6 出口节点支持 `direct` 模式，前提是主服务器能通过 IPv6 连接该节点。交互式部署时 IPv6 地址直接填裸地址：
+
+```text
+SSH 主机/IP: 2001:db8::10
+WireGuard 公网端点主机/IP: 2001:db8::10
+WireGuard 公网端点端口: 51820
+```
+
+WarpPool 会自动把 WireGuard endpoint 写成 `[2001:db8::10]:51820`，并为隧道增加一组 IPv6 ULA 地址。出口节点会开启 IPv6 forwarding，并通过 `ip6tables` MASQUERADE 实现 direct IPv6 出口。如果主服务器注册监听也使用 IPv6 字面量，生成的 URL 会使用 `http://[IPv6]:端口` 格式；实际使用时更推荐绑定 AAAA 域名。
+
 默认开启 SSH HostKey 校验。如果交互部署时默认 `known_hosts` 文件不存在，WarpPool 会询问本次部署是否跳过 SSH HostKey 校验。非交互部署或临时测试时可以显式传入：
 
 ```bash
@@ -309,9 +319,11 @@ wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/i
 脚本会进入手动交互菜单：
 
 1. 询问主服务器 IP/域名，不填将只安装节点依赖。
-2. 如果填写了主服务器地址，将询问注册端口。
+2. 如果填写了主服务器地址，将询问注册端口。IPv4/IPv6 字面量默认 `8080`，域名默认 `80`。
 3. 如需自动注册，需要填写 Deploy Token。
 4. 自动注册时会询问本节点 WireGuard 监听端口和主服务器连接本节点的公网 UDP 端口。
+
+纯 IPv6 出口节点建议在询问 WireGuard 公网端点时手动填写节点公网 IPv6，不要带中括号，程序会自动格式化。
 
 如果不填写主服务器 IP/域名 或不填写 Deploy Token，脚本只安装节点依赖，不会写入 WireGuard 配置，也不会在主服务器生成节点记录。后续可以在主服务器执行 `warppool deploy-token`，再把生成的一行命令复制到节点执行。
 
@@ -329,6 +341,12 @@ curl -fsSL https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/
 
 ```bash
 wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- token=<token> server=http://<主服务器IP>:8080
+```
+
+如果主服务器使用 IPv6 字面量访问，URL 必须带中括号：
+
+```bash
+wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- token=<token> server=http://[2001:db8::1]:8080
 ```
 
 这时节点会先从主服务器读取 Deploy Token 中保存的出口模式，再决定是否安装 WARP。
@@ -354,7 +372,7 @@ warppool deploy-token
 为避免重复配置，Deploy Token 流程按下面规则决定配置来源：
 
 - 主服务器决定：节点名称、出口模式、代理协议、本地代理端口；dual 模式下还包括 WARP 本地代理端口。
-- 出口节点决定：本机 WireGuard 监听端口、自动检测或手动填写的公网端点、NAT 映射后的公网 UDP 端口。
+- 出口节点决定：本机 WireGuard 监听端口、自动检测或手动填写的公网端点、NAT 映射后的公网 UDP 端口。纯 IPv6 节点请填写公网 IPv6 作为端点 host/IP。
 
 如果出口节点是 NAT VPS，并且公网 UDP 端口映射和节点本机 WireGuard 监听端口不同，在出口节点执行安装命令后，根据提示填写映射出来的公网 UDP 端口即可。
 

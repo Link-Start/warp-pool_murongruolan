@@ -428,8 +428,10 @@ func validateDeployTokenNodeNameAvailable(cfg config.Config, name string) error 
 
 func checkListenReachable(host string, port int) error {
 	targetHost := host
-	if targetHost == "0.0.0.0" || targetHost == "::" {
+	if targetHost == "0.0.0.0" {
 		targetHost = "127.0.0.1"
+	} else if targetHost == "::" {
+		targetHost = "::1"
 	}
 
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort(targetHost, fmt.Sprintf("%d", port)), 2*time.Second)

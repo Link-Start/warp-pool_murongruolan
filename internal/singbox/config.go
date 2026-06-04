@@ -194,20 +194,26 @@ func buildNodeVariant(variant nodeVariant, opts Options) (Inbound, Endpoint, Rou
 		Listen:     node.BindHost,
 		ListenPort: variant.ListenPort,
 	}
+	addresses := wireGuardEndpointAddresses(variant.ClientAddress, node)
+	allowedIPs := []string{"0.0.0.0/0"}
+	if hasIPv6Address(addresses) {
+		allowedIPs = append(allowedIPs, "::/0")
+	}
+
 	endpoint := Endpoint{
 		Type:       "wireguard",
 		Tag:        variant.EndpointTag,
 		System:     false,
 		Name:       variant.EndpointName,
 		MTU:        opts.MTU,
-		Address:    []string{variant.ClientAddress},
+		Address:    addresses,
 		PrivateKey: variant.PrivateKey,
 		Peers: []EndpointPeer{
 			{
 				Address:             host,
 				Port:                port,
 				PublicKey:           node.WGServerPublicKey,
-				AllowedIPs:          []string{"0.0.0.0/0"},
+				AllowedIPs:          allowedIPs,
 				PersistentKeepalive: 25,
 			},
 		},
@@ -217,6 +223,30 @@ func buildNodeVariant(variant nodeVariant, opts Options) (Inbound, Endpoint, Rou
 		Outbound: variant.EndpointTag,
 	}
 	return inbound, endpoint, rule, nil
+}
+
+func wireGuardEndpointAddresses(clientAddress string, node config.Node) []string {
+	addresses := []string{clientAddress}
+	switch clientAddress {
+	case node.WGWarpClientAddress:
+		if strings.TrimSpace(node.WGWarpClientIPv6Address) != "" {
+			addresses = append(addresses, node.WGWarpClientIPv6Address)
+		}
+	default:
+		if strings.TrimSpace(node.WGClientIPv6Address) != "" {
+			addresses = append(addresses, node.WGClientIPv6Address)
+		}
+	}
+	return addresses
+}
+
+func hasIPv6Address(addresses []string) bool {
+	for _, address := range addresses {
+		if strings.Contains(strings.Split(address, "/")[0], ":") {
+			return true
+		}
+	}
+	return false
 }
 
 func validateNode(node config.Node) error {
@@ -262,6 +292,9 @@ func validateNode(node config.Node) error {
 			if strings.TrimSpace(field.value) == "" {
 				return fmt.Errorf("node %s missing %s; deploy it as dual first", node.Name, field.name)
 			}
+		}
+		if strings.TrimSpace(node.WGClientIPv6Address) != "" && strings.TrimSpace(node.WGWarpClientIPv6Address) == "" {
+			return fmt.Errorf("node %s missing wg_warp_client_ipv6_address; redeploy it as dual first", node.Name)
 		}
 	}
 	return nil

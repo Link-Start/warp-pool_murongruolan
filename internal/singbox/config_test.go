@@ -96,6 +96,29 @@ func TestBuildDualConfigCreatesTwoInboundsAndEndpoints(t *testing.T) {
 	}
 }
 
+func TestBuildIPv6WireGuardEndpoint(t *testing.T) {
+	cfg := config.Default()
+	node := testNode()
+	node.Endpoint = "[2001:db8::10]:51821"
+	node.WGClientIPv6Address = "fd7a:7761:7270::2/126"
+	cfg.Nodes = []config.Node{node}
+
+	sb, err := Build(cfg, Options{})
+	if err != nil {
+		t.Fatalf("build config: %v", err)
+	}
+	endpoint := sb.Endpoints[0]
+	if endpoint.Peers[0].Address != "2001:db8::10" || endpoint.Peers[0].Port != 51821 {
+		t.Fatalf("unexpected ipv6 peer: %#v", endpoint.Peers[0])
+	}
+	if len(endpoint.Address) != 2 || endpoint.Address[1] != "fd7a:7761:7270::2/126" {
+		t.Fatalf("unexpected endpoint addresses: %#v", endpoint.Address)
+	}
+	if len(endpoint.Peers[0].AllowedIPs) != 2 || endpoint.Peers[0].AllowedIPs[1] != "::/0" {
+		t.Fatalf("unexpected allowed ips: %#v", endpoint.Peers[0].AllowedIPs)
+	}
+}
+
 func TestInboundTag(t *testing.T) {
 	if got := InboundTag("US1"); !strings.HasPrefix(got, "in-us1-") {
 		t.Fatalf("unexpected inbound tag: %s", got)

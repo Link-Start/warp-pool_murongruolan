@@ -158,6 +158,60 @@ func TestBuildPlanKeepsExplicitHostPort(t *testing.T) {
 	}
 }
 
+func TestBuildPlanWithIPv6EndpointAddsIPv6Tunnel(t *testing.T) {
+	cfg := config.Default()
+	plan, err := BuildPlan(cfg, Options{
+		Node: config.Node{
+			Name: "nat-1",
+		},
+		Endpoint:         "2001:db8::10",
+		EgressInterface:  "eth0",
+		EnableForwarding: true,
+	})
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+	if plan.Endpoint != "[2001:db8::10]:51820" {
+		t.Fatalf("unexpected endpoint: %s", plan.Endpoint)
+	}
+	if plan.ServerIPv6Address != "fd7a:7761:7270::1/126" || plan.ClientIPv6Address != "fd7a:7761:7270::2/126" {
+		t.Fatalf("unexpected ipv6 addresses: server=%s client=%s", plan.ServerIPv6Address, plan.ClientIPv6Address)
+	}
+	for _, want := range []string{
+		"Address = 10.200.0.1/30, fd7a:7761:7270::1/126",
+		"AllowedIPs = 10.200.0.2/32, fd7a:7761:7270::2/128",
+		"Address = 10.200.0.2/30, fd7a:7761:7270::2/126",
+		"AllowedIPs = 10.200.0.1/32, fd7a:7761:7270::1/128",
+		"ip6tables -t nat -A POSTROUTING -s fd7a:7761:7270::2/128 -o eth0 -j MASQUERADE",
+	} {
+		if !strings.Contains(plan.ServerConfig+"\n"+plan.ClientConfig, want) {
+			t.Fatalf("missing %q:\nserver:\n%s\nclient:\n%s", want, plan.ServerConfig, plan.ClientConfig)
+		}
+	}
+}
+
+func TestBuildPlanDualWithIPv6EndpointAllocatesIPv6WarpAddress(t *testing.T) {
+	cfg := config.Default()
+	plan, err := BuildPlan(cfg, Options{
+		Node: config.Node{
+			Name:     "nat-1",
+			ExitMode: config.ExitModeDual,
+		},
+		Endpoint: "2001:db8::10",
+	})
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+	if plan.ServerIPv6Address != "fd7a:7761:7270::1/125" ||
+		plan.ClientIPv6Address != "fd7a:7761:7270::2/128" ||
+		plan.WarpClientIPv6Address != "fd7a:7761:7270::3/128" {
+		t.Fatalf("unexpected dual ipv6 addresses: server=%s client=%s warp=%s", plan.ServerIPv6Address, plan.ClientIPv6Address, plan.WarpClientIPv6Address)
+	}
+	if !strings.Contains(plan.WarpClientConfig, "Address = 10.200.0.3/32, fd7a:7761:7270::3/128") {
+		t.Fatalf("missing warp ipv6 client config:\n%s", plan.WarpClientConfig)
+	}
+}
+
 func TestSafeDeviceNameAddsHashWhenTruncated(t *testing.T) {
 	first := SafeDeviceName("nat-preflight-1")
 	second := SafeDeviceName("nat-preflight-2")

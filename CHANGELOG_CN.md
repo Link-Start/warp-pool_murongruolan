@@ -8,6 +8,8 @@
 - Clash 导出会为 dual 节点生成 direct 和 WARP 两个代理条目。
 - 修复 `warppool node remove` / `wpl node remove` 只删除节点记录但不刷新本地代理，导致端口继续被占用的问题。
 - `node remove` 现在会先输出所选节点信息，并要求 `y/N` 确认，默认 `N`；确认后会刷新/停止本地代理并默认清理本地 WireGuard 客户端配置。
+- 新增纯 IPv6 出口节点 `direct` 模式支持：IPv6 WireGuard endpoint 自动加中括号，自动生成 IPv6 隧道地址，并在节点侧开启 IPv6 forwarding 与 `ip6tables` MASQUERADE。
+- Pull/Deploy Token 安装脚本会正确格式化 IPv6 字面量主服务器 URL，并优先使用支持 IPv6 的公网端点检测。
 
 ## v0.1.10
 

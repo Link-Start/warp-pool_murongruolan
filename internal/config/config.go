@@ -52,41 +52,45 @@ type Defaults struct {
 	Proxy    string `json:"proxy"`
 	ExitMode string `json:"exit_mode"`
 	CIDR     string `json:"cidr"`
+	CIDR6    string `json:"cidr6,omitempty"`
 }
 
 type Node struct {
-	Name                   string `json:"name"`
-	ExitMode               string `json:"exit_mode"`
-	Proxy                  string `json:"proxy"`
-	BindHost               string `json:"bind_host"`
-	LocalPort              int    `json:"local_port"`
-	WarpLocalPort          int    `json:"warp_local_port,omitempty"`
-	PublicIP               string `json:"public_ip,omitempty"`
-	Country                string `json:"country,omitempty"`
-	WGDevice               string `json:"wg_device,omitempty"`
-	WGAddress              string `json:"wg_address,omitempty"`
-	WGServerAddress        string `json:"wg_server_address,omitempty"`
-	WGClientAddress        string `json:"wg_client_address,omitempty"`
-	WGListenPort           int    `json:"wg_listen_port,omitempty"`
-	WGServerPublicKey      string `json:"wg_server_public_key,omitempty"`
-	WGClientPublicKey      string `json:"wg_client_public_key,omitempty"`
-	WGClientPrivateKey     string `json:"wg_client_private_key,omitempty"`
-	WGClientConfig         string `json:"wg_client_config,omitempty"`
-	WGWarpClientAddress    string `json:"wg_warp_client_address,omitempty"`
-	WGWarpClientPublicKey  string `json:"wg_warp_client_public_key,omitempty"`
-	WGWarpClientPrivateKey string `json:"wg_warp_client_private_key,omitempty"`
-	WGWarpClientConfig     string `json:"wg_warp_client_config,omitempty"`
-	WGLocalDevice          string `json:"wg_local_device,omitempty"`
-	WGLocalConfigPath      string `json:"wg_local_config_path,omitempty"`
-	Endpoint               string `json:"endpoint,omitempty"`
-	SSHHost                string `json:"ssh_host,omitempty"`
-	SSHPort                int    `json:"ssh_port,omitempty"`
-	SSHUser                string `json:"ssh_user,omitempty"`
-	SSHKeyPath             string `json:"ssh_key_path,omitempty"`
-	SSHKnownHostsPath      string `json:"ssh_known_hosts_path,omitempty"`
-	SSHInsecureHostKey     bool   `json:"ssh_insecure_skip_host_key_check,omitempty"`
-	CreatedAt              string `json:"created_at,omitempty"`
-	LastUpdated            string `json:"last_updated,omitempty"`
+	Name                    string `json:"name"`
+	ExitMode                string `json:"exit_mode"`
+	Proxy                   string `json:"proxy"`
+	BindHost                string `json:"bind_host"`
+	LocalPort               int    `json:"local_port"`
+	WarpLocalPort           int    `json:"warp_local_port,omitempty"`
+	PublicIP                string `json:"public_ip,omitempty"`
+	Country                 string `json:"country,omitempty"`
+	WGDevice                string `json:"wg_device,omitempty"`
+	WGAddress               string `json:"wg_address,omitempty"`
+	WGServerAddress         string `json:"wg_server_address,omitempty"`
+	WGClientAddress         string `json:"wg_client_address,omitempty"`
+	WGServerIPv6Address     string `json:"wg_server_ipv6_address,omitempty"`
+	WGClientIPv6Address     string `json:"wg_client_ipv6_address,omitempty"`
+	WGListenPort            int    `json:"wg_listen_port,omitempty"`
+	WGServerPublicKey       string `json:"wg_server_public_key,omitempty"`
+	WGClientPublicKey       string `json:"wg_client_public_key,omitempty"`
+	WGClientPrivateKey      string `json:"wg_client_private_key,omitempty"`
+	WGClientConfig          string `json:"wg_client_config,omitempty"`
+	WGWarpClientAddress     string `json:"wg_warp_client_address,omitempty"`
+	WGWarpClientIPv6Address string `json:"wg_warp_client_ipv6_address,omitempty"`
+	WGWarpClientPublicKey   string `json:"wg_warp_client_public_key,omitempty"`
+	WGWarpClientPrivateKey  string `json:"wg_warp_client_private_key,omitempty"`
+	WGWarpClientConfig      string `json:"wg_warp_client_config,omitempty"`
+	WGLocalDevice           string `json:"wg_local_device,omitempty"`
+	WGLocalConfigPath       string `json:"wg_local_config_path,omitempty"`
+	Endpoint                string `json:"endpoint,omitempty"`
+	SSHHost                 string `json:"ssh_host,omitempty"`
+	SSHPort                 int    `json:"ssh_port,omitempty"`
+	SSHUser                 string `json:"ssh_user,omitempty"`
+	SSHKeyPath              string `json:"ssh_key_path,omitempty"`
+	SSHKnownHostsPath       string `json:"ssh_known_hosts_path,omitempty"`
+	SSHInsecureHostKey      bool   `json:"ssh_insecure_skip_host_key_check,omitempty"`
+	CreatedAt               string `json:"created_at,omitempty"`
+	LastUpdated             string `json:"last_updated,omitempty"`
 }
 
 type DeployToken struct {
@@ -138,6 +142,7 @@ func Default() Config {
 			Proxy:    ProxyMixed,
 			ExitMode: ExitModeDirect,
 			CIDR:     "10.200.0.0/16",
+			CIDR6:    "fd7a:7761:7270::/64",
 		},
 		Nodes:      []Node{},
 		Tokens:     []DeployToken{},
@@ -170,7 +175,46 @@ func Load(path string) (Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parse config %s: %w", path, err)
 	}
+	cfg = ApplyDefaults(cfg)
 	return cfg, nil
+}
+
+func ApplyDefaults(cfg Config) Config {
+	def := Default()
+	if cfg.Language == "" {
+		cfg.Language = def.Language
+	}
+	if cfg.Listen.Host == "" {
+		cfg.Listen.Host = def.Listen.Host
+	}
+	if cfg.Listen.Port == 0 {
+		cfg.Listen.Port = def.Listen.Port
+	}
+	if cfg.Defaults.BindHost == "" {
+		cfg.Defaults.BindHost = def.Defaults.BindHost
+	}
+	if cfg.Defaults.Proxy == "" {
+		cfg.Defaults.Proxy = def.Defaults.Proxy
+	}
+	if cfg.Defaults.ExitMode == "" {
+		cfg.Defaults.ExitMode = def.Defaults.ExitMode
+	}
+	if cfg.Defaults.CIDR == "" {
+		cfg.Defaults.CIDR = def.Defaults.CIDR
+	}
+	if cfg.Defaults.CIDR6 == "" {
+		cfg.Defaults.CIDR6 = def.Defaults.CIDR6
+	}
+	if cfg.Nodes == nil {
+		cfg.Nodes = []Node{}
+	}
+	if cfg.Tokens == nil {
+		cfg.Tokens = []DeployToken{}
+	}
+	if cfg.ModeTokens == nil {
+		cfg.ModeTokens = []NodeModeToken{}
+	}
+	return cfg
 }
 
 func checkConfigPermissions(path string) error {

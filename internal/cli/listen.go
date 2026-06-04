@@ -276,7 +276,7 @@ func listenURL(host string, port int) string {
 	if host == "0.0.0.0" || host == "::" {
 		host = "<主服务器IP>"
 	}
-	return fmt.Sprintf("http://%s:%d", host, port)
+	return "http://" + net.JoinHostPort(strings.Trim(host, "[]"), fmt.Sprintf("%d", port))
 }
 
 func newListenServiceCommand() *cobra.Command {

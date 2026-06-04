@@ -643,8 +643,11 @@ func printNodeDetails(out interface{ Write([]byte) (int, error) }, language stri
 	}
 	printNodeField(w, language, "wg_server_address", "WireGuard 服务端地址", node.WGServerAddress)
 	printNodeField(w, language, "wg_client_address", "WireGuard 客户端地址", node.WGClientAddress)
+	printNodeField(w, language, "wg_server_ipv6_address", "WireGuard IPv6 服务端地址", node.WGServerIPv6Address)
+	printNodeField(w, language, "wg_client_ipv6_address", "WireGuard IPv6 客户端地址", node.WGClientIPv6Address)
 	if node.ExitMode == config.ExitModeDual {
 		printNodeField(w, language, "wg_warp_client_address", "WireGuard WARP 客户端地址", node.WGWarpClientAddress)
+		printNodeField(w, language, "wg_warp_client_ipv6_address", "WireGuard WARP IPv6 客户端地址", node.WGWarpClientIPv6Address)
 	}
 	printNodeField(w, language, "wg_listen_port", "WireGuard 监听端口", intString(node.WGListenPort))
 	printNodeField(w, language, "endpoint", "WireGuard 公网端点", node.Endpoint)
