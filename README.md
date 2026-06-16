@@ -100,9 +100,11 @@ Exit node
 | Debian 11+ | Supported |
 | Alpine 3.20+ | Supported |
 
-WARP mode is supported on Ubuntu/Debian and Alpine. Ubuntu/Debian use the official Cloudflare WARP client when available. Alpine uses `wgcf` to generate a WARP WireGuard profile and sing-box's embedded WireGuard endpoint. On Alpine, WarpPool first runs `apk update` and installs `sing-box` from the Alpine package repository when available; if the package is unavailable, cannot run, or cannot load the generated WARP config, WarpPool falls back to the GitHub musl build.
+WARP mode is supported on Ubuntu/Debian and Alpine. Ubuntu/Debian use the official Cloudflare WARP client when available and prefer repository `redsocks` for WARP SOCKS transparent forwarding, reducing GitHub API dependency on IPv6-only nodes; if `redsocks` is unavailable, WarpPool falls back to sing-box. Alpine uses `wgcf` to generate a WARP WireGuard profile and sing-box's embedded WireGuard endpoint. On Alpine, WarpPool first runs `apk update` and installs `sing-box` from the Alpine package repository when available; if the package is unavailable, cannot run, or cannot load the generated WARP config, WarpPool falls back to the GitHub musl build.
 
 Recommended disk size: around 1 GB. The installer is optimized for small disks by installing only required WireGuard tools, avoiding the WireGuard meta package on Debian/Ubuntu, and cleaning package caches after installation steps.
+
+Debian/Ubuntu installers detect unavailable `*-backports` apt sources. If an expired backports repository on systems such as Debian 11 breaks `apt-get update`, WarpPool backs up the source file, disables the backports entry, and retries automatically.
 
 ### CPU Architecture
 
@@ -125,7 +127,7 @@ Exit node:
 
 - Root SSH access
 - `/dev/net/tun`
-- IPv4 connectivity
+- IPv4 or IPv6 connectivity. IPv6-only exit nodes can be used with `direct` mode; WARP mode depends on the node OS and Cloudflare WARP availability.
 - `apt` or `apk` package manager depending on OS
 
 ---
@@ -265,6 +267,8 @@ curl --socks5 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace
 
 Current limitation: WARP forwarding is TCP-first. UDP and IPv6 are not promised as complete yet.
 
+On Ubuntu/Debian, WARP forwarding first reuses the official Cloudflare WARP local SOCKS port `127.0.0.1:40000`. If the port is not ready immediately, the helper waits and retries. The forwarding component prefers repository `redsocks` and only falls back to sing-box when `redsocks` is unavailable. This lets most IPv6-only Debian/Ubuntu nodes complete WARP forwarding without querying the GitHub API.
+
 On Alpine, WARP mode uses:
 
 ```text
@@ -331,6 +335,7 @@ Notes:
 
 - `dual` uses the same remote WireGuard listen port, so NAT VPS users do not need a second UDP mapping.
 - The exit node routes by WireGuard client source address: the direct address goes to the node network, and the WARP address goes to Cloudflare WARP.
+- IPv6-only exit nodes can use `dual`; enter the node's bare IPv6 address when the main server connects to the node. The direct port exits through the node's IPv6 network, while the WARP port exits through Cloudflare WARP.
 - `warppool ping <node>` checks both local proxy ports in dual mode.
 - Existing single-mode nodes cannot become dual by changing local config only. Redeploy the node, or later use the configuration refresh flow to push dual WireGuard metadata.
 

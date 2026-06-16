@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.11
+
 - Added `dual` deployment mode: one exit node can expose both direct and WARP local proxy ports.
 - `warppool deploy` and `warppool deploy-token` can select `dual/direct+warp` and validate both local ports.
 - `warppool ping` checks both direct and WARP proxy ports for dual nodes.

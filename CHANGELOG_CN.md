@@ -2,6 +2,8 @@
 
 ## 未发布
 
+## v0.1.11
+
 - 新增 `dual` 双模式部署：同一个出口节点同时提供 direct 和 WARP 两个本地代理端口。
 - `warppool deploy` / `warppool deploy-token` 支持选择 `dual/direct+warp`，并对两个本地端口做占用检测。
 - `warppool ping` 在 dual 模式下会分别检测 direct 和 WARP 两个代理端口。
