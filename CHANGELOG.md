@@ -11,6 +11,8 @@
 - Added IPv6-only exit node support for `direct` mode: IPv6 WireGuard endpoints are bracketed automatically, IPv6 tunnel addresses are generated, and node-side direct forwarding now enables IPv6 forwarding plus `ip6tables` MASQUERADE.
 - Pull/Deploy Token install scripts now format literal IPv6 main-server URLs correctly and prefer IPv6-capable endpoint detection.
 - Debian/Ubuntu installers now back up and disable unavailable `*-backports` apt source entries, then retry `apt-get update`, avoiding deployment failures on Debian 11 IPv6-only nodes with stale backports repositories.
+- Improved WARP forwarding setup: official WARP SOCKS readiness is retried, and Debian/Ubuntu nodes now prefer repository `redsocks` for SOCKS transparent forwarding to avoid sing-box download failures when GitHub API is unreachable on IPv6-only nodes.
+- `singbox_install.sh` now falls back to a pinned sing-box release URL when the GitHub latest-release API cannot be queried.
 
 ## v0.1.10
 

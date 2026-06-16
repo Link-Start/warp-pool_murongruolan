@@ -11,6 +11,8 @@
 - 新增纯 IPv6 出口节点 `direct` 模式支持：IPv6 WireGuard endpoint 自动加中括号，自动生成 IPv6 隧道地址，并在节点侧开启 IPv6 forwarding 与 `ip6tables` MASQUERADE。
 - Pull/Deploy Token 安装脚本会正确格式化 IPv6 字面量主服务器 URL，并优先使用支持 IPv6 的公网端点检测。
 - Debian/Ubuntu 安装流程遇到失效的 `*-backports` apt 源时，会备份并禁用对应源条目后自动重试，避免 Debian 11 纯 IPv6 小鸡因过期 backports 源直接部署失败。
+- 优化 WARP 转发安装：官方 WARP SOCKS 端口短暂未就绪时会等待重试；Debian/Ubuntu 节点优先使用系统仓库 `redsocks` 做 SOCKS 透明转发，减少纯 IPv6 小鸡因无法访问 GitHub API 而下载 sing-box 失败的问题。
+- `singbox_install.sh` 查询 GitHub latest API 失败时会回退到固定 sing-box 版本直链，避免仅因 GitHub API 不通直接中断。
 
 ## v0.1.10
 

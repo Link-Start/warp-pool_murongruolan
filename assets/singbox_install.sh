@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 SOURCE="${WARPOOL_SINGBOX_SOURCE:-auto}"
 VERSION="${WARPOOL_SINGBOX_VERSION:-latest}"
+FALLBACK_VERSION="${WARPOOL_SINGBOX_FALLBACK_VERSION:-v1.13.12}"
 VARIANT="${WARPOOL_SINGBOX_VARIANT:-auto}"
 CUSTOM_URL="${WARPOOL_SINGBOX_URL:-}"
 INSTALL_DIR="${WARPOOL_SINGBOX_INSTALL_DIR:-/usr/local/lib/warppool/bin}"
@@ -246,10 +247,18 @@ resolve_latest_version() {
   local json tag
   require_command curl
   log "resolving latest sing-box release from GitHub"
-  json="$(curl -fsSL "$GITHUB_API_LATEST")" || fail "failed to query GitHub latest release API: $GITHUB_API_LATEST"
+  if ! json="$(curl -fsSL "$GITHUB_API_LATEST")"; then
+    log "warning: failed to query GitHub latest release API: $GITHUB_API_LATEST"
+    log "falling back to pinned sing-box release: $FALLBACK_VERSION"
+    resolve_fixed_version "$FALLBACK_VERSION"
+    return 0
+  fi
   tag="$(printf '%s\n' "$json" | sed -n 's/^[[:space:]]*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
   if [ -z "$tag" ]; then
-    fail "cannot parse latest sing-box release tag from GitHub API"
+    log "warning: cannot parse latest sing-box release tag from GitHub API"
+    log "falling back to pinned sing-box release: $FALLBACK_VERSION"
+    resolve_fixed_version "$FALLBACK_VERSION"
+    return 0
   fi
 
   SINGBOX_TAG="$tag"

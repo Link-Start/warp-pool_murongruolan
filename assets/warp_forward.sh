@@ -13,6 +13,8 @@ WARP_PROFILE_PATH="/etc/warppool-node/warp/wgcf-profile.conf"
 WARP_ENDPOINT=""
 WARP_PROBE_PORT="${WARPPOOL_WARP_PROBE_PORT:-40100}"
 SINGBOX_BIN=""
+FORWARDER_TYPE=""
+FORWARDER_BIN=""
 STATE_DIR="/var/lib/warppool/warp-forward"
 AUTO_INSTALL_SINGBOX="true"
 VERIFY_WARP="true"
@@ -259,6 +261,84 @@ install_singbox() {
   fi
 }
 
+redsocks_can_run() {
+  local binary="$1"
+  [ -x "$binary" ] || return 1
+  "$binary" -h >/dev/null 2>&1 || "$binary" -v >/dev/null 2>&1 || return 0
+}
+
+resolve_installed_redsocks_path() {
+  local system_binary
+  system_binary="$(command -v redsocks 2>/dev/null || true)"
+  if [ -n "$system_binary" ] && [ -x "$system_binary" ]; then
+    printf '%s\n' "$system_binary"
+    return 0
+  fi
+  return 1
+}
+
+install_redsocks() {
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: install redsocks from system package repository"
+    FORWARDER_BIN="/usr/sbin/redsocks"
+    return 0
+  fi
+
+  if command -v apt-get >/dev/null 2>&1; then
+    log "installing redsocks from apt repository"
+    env DEBIAN_FRONTEND=noninteractive apt-get update || true
+    env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends redsocks || return 1
+  elif command -v apk >/dev/null 2>&1; then
+    log "installing redsocks from apk repository"
+    apk update || true
+    apk add --no-cache redsocks || return 1
+  else
+    return 1
+  fi
+
+  FORWARDER_BIN="$(resolve_installed_redsocks_path || true)"
+  [ -n "$FORWARDER_BIN" ] || return 1
+}
+
+resolve_socks_forwarder() {
+  if [ -n "$SINGBOX_BIN" ] && singbox_can_run "$SINGBOX_BIN"; then
+    FORWARDER_TYPE="singbox"
+    FORWARDER_BIN="$SINGBOX_BIN"
+    return 0
+  fi
+
+  SINGBOX_BIN="$(resolve_installed_singbox_path || true)"
+  if [ -n "$SINGBOX_BIN" ]; then
+    FORWARDER_TYPE="singbox"
+    FORWARDER_BIN="$SINGBOX_BIN"
+    log "using existing sing-box forwarder: $SINGBOX_BIN"
+    return 0
+  fi
+
+  FORWARDER_BIN="$(resolve_installed_redsocks_path || true)"
+  if [ -n "$FORWARDER_BIN" ]; then
+    FORWARDER_TYPE="redsocks"
+    log "using existing redsocks forwarder: $FORWARDER_BIN"
+    return 0
+  fi
+
+  if install_redsocks; then
+    FORWARDER_TYPE="redsocks"
+    log "using redsocks forwarder: $FORWARDER_BIN"
+    return 0
+  fi
+
+  if [ "$AUTO_INSTALL_SINGBOX" = "true" ]; then
+    log "redsocks unavailable; falling back to WarpPool managed sing-box"
+    install_singbox auto
+    FORWARDER_TYPE="singbox"
+    FORWARDER_BIN="$SINGBOX_BIN"
+    return 0
+  fi
+
+  fail "no SOCKS redirect forwarder found; install redsocks or sing-box"
+}
+
 resolve_singbox() {
   if [ -n "$SINGBOX_BIN" ]; then
     if ! singbox_can_run "$SINGBOX_BIN"; then
@@ -312,16 +392,12 @@ verify_warp_proxy() {
     return 0
   fi
 
-  require_command curl
   if [ "$DRY_RUN" = "true" ]; then
     log "dry-run: verify WARP proxy via socks5h://$WARP_PROXY_HOST:$WARP_PROXY_PORT"
     return 0
   fi
 
-  local trace
-  trace="$(curl --max-time 20 --socks5-hostname "$WARP_PROXY_HOST:$WARP_PROXY_PORT" -fsSL https://www.cloudflare.com/cdn-cgi/trace || true)"
-  if ! printf '%s\n' "$trace" | grep -q '^warp=on$'; then
-    printf '%s\n' "$trace" >&2
+  if ! wait_proxy_port_warp "$WARP_PROXY_HOST" "$WARP_PROXY_PORT" 15 2; then
     fail "WARP proxy verification failed: expected warp=on from $WARP_PROXY_HOST:$WARP_PROXY_PORT"
   fi
   log "WARP proxy verified: warp=on"
@@ -542,12 +618,27 @@ verify_proxy_port_warp() {
   local host="$1" port="$2"
   local trace
   require_command curl
-  trace="$(curl --max-time 20 --socks5-hostname "$host:$port" -fsSL https://www.cloudflare.com/cdn-cgi/trace || true)"
+  trace="$(curl --max-time 20 --socks5-hostname "$host:$port" -fsSL https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null || true)"
   printf '%s\n' "$trace" | grep -q '^warp=on$'
+}
+
+wait_proxy_port_warp() {
+  local host="$1" port="$2" attempts="$3" delay="$4" attempt
+  for attempt in $(seq 1 "$attempts"); do
+    if verify_proxy_port_warp "$host" "$port"; then
+      [ "$attempt" -gt 1 ] && log "WARP proxy became available on attempt $attempt"
+      return 0
+    fi
+    sleep "$delay"
+  done
+  return 1
 }
 
 probe_wireguard_backend() {
   local candidate host port probe_config probe_log probe_pid
+  resolve_singbox
+  FORWARDER_TYPE="singbox"
+  FORWARDER_BIN="$SINGBOX_BIN"
   read_warp_profile
   build_warp_endpoint_candidates
   [ -n "$WARP_ENDPOINT_CANDIDATES" ] || fail "no WARP endpoint candidates available"
@@ -604,7 +695,7 @@ select_warp_backend() {
       probe_wireguard_backend
       ;;
     auto)
-      if [ "$VERIFY_WARP" = "true" ] && [ "$DRY_RUN" != "true" ] && verify_proxy_port_warp "$WARP_PROXY_HOST" "$WARP_PROXY_PORT"; then
+      if [ "$VERIFY_WARP" = "true" ] && [ "$DRY_RUN" != "true" ] && wait_proxy_port_warp "$WARP_PROXY_HOST" "$WARP_PROXY_PORT" 15 2; then
         log "using official WARP local SOCKS proxy: $WARP_PROXY_HOST:$WARP_PROXY_PORT"
         WARP_BACKEND_EFFECTIVE="socks"
       else
@@ -634,6 +725,33 @@ write_singbox_config() {
     return 0
   fi
 
+  resolve_socks_forwarder
+
+  if [ "$FORWARDER_TYPE" = "redsocks" ]; then
+    mkdir -p "$STATE_DIR"
+    cat >"$CONFIG_PATH" <<EOF
+base {
+  log_debug = off;
+  log_info = on;
+  log = "file:$LOG_PATH";
+  daemon = off;
+  redirector = iptables;
+}
+
+redsocks {
+  local_ip = $REDIRECT_LISTEN;
+  local_port = $TRANSPARENT_PORT;
+  ip = $WARP_PROXY_HOST;
+  port = $WARP_PROXY_PORT;
+  type = socks5;
+}
+EOF
+    chmod 0600 "$CONFIG_PATH"
+    return 0
+  fi
+
+  FORWARDER_TYPE="singbox"
+  FORWARDER_BIN="$SINGBOX_BIN"
   mkdir -p "$STATE_DIR"
   cat >"$CONFIG_PATH" <<EOF
 {
@@ -673,6 +791,31 @@ EOF
   chmod 0600 "$CONFIG_PATH"
 }
 
+forwarder_exec_start() {
+  case "$FORWARDER_TYPE" in
+    redsocks)
+      printf '%s -c %s' "$FORWARDER_BIN" "$CONFIG_PATH"
+      ;;
+    *)
+      printf '%s run -c %s' "$SINGBOX_BIN" "$CONFIG_PATH"
+      ;;
+  esac
+}
+
+forwarder_command() {
+  case "$FORWARDER_TYPE" in
+    redsocks) printf '%s' "$FORWARDER_BIN" ;;
+    *) printf '%s' "$SINGBOX_BIN" ;;
+  esac
+}
+
+forwarder_args() {
+  case "$FORWARDER_TYPE" in
+    redsocks) printf '%s' "-c $CONFIG_PATH" ;;
+    *) printf '%s' "run -c $CONFIG_PATH" ;;
+  esac
+}
+
 systemd_available() {
   command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
 }
@@ -682,6 +825,7 @@ openrc_available() {
 }
 
 start_singbox() {
+  local exec_start command_path command_args
   if systemd_available; then
     if [ "$DRY_RUN" = "true" ]; then
       log "dry-run: write systemd unit: $UNIT_PATH"
@@ -689,6 +833,7 @@ start_singbox() {
       return 0
     fi
 
+    exec_start="$(forwarder_exec_start)"
     cat >"$UNIT_PATH" <<EOF
 [Unit]
 Description=WarpPool WARP forward for $DEVICE
@@ -699,7 +844,7 @@ Wants=network-online.target
 Type=simple
 ExecStartPre=/bin/sh -c 'iptables -C INPUT -i $DEVICE -p tcp -j ACCEPT 2>/dev/null || iptables -A INPUT -i $DEVICE -p tcp -j ACCEPT'
 ExecStartPre=/bin/sh -c 'iptables -t nat -C PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT 2>/dev/null || iptables -t nat -A PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT'
-ExecStart=$SINGBOX_BIN run -c $CONFIG_PATH
+ExecStart=$exec_start
 ExecStopPost=/bin/sh -c 'while iptables -t nat -C PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT >/dev/null 2>&1; do iptables -t nat -D PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT; done; while iptables -C INPUT -i $DEVICE -p tcp -j ACCEPT >/dev/null 2>&1; do iptables -D INPUT -i $DEVICE -p tcp -j ACCEPT; done'
 Restart=on-failure
 RestartSec=3
@@ -718,12 +863,14 @@ EOF
       log "dry-run: rc-update add $OPENRC_NAME default && rc-service $OPENRC_NAME restart"
       return 0
     fi
+    command_path="$(forwarder_command)"
+    command_args="$(forwarder_args)"
     cat >"$OPENRC_PATH" <<EOF
 #!/sbin/openrc-run
 name="WarpPool WARP forward for $DEVICE"
 description="WarpPool WARP forward for $DEVICE"
-command="$SINGBOX_BIN"
-command_args="run -c $CONFIG_PATH"
+command="$command_path"
+command_args="$command_args"
 command_background="yes"
 pidfile="$PID_PATH"
 output_log="$LOG_PATH"
@@ -768,7 +915,14 @@ EOF
     fi
   fi
 
-  nohup "$SINGBOX_BIN" run -c "$CONFIG_PATH" >"$LOG_PATH" 2>&1 &
+  case "$FORWARDER_TYPE" in
+    redsocks)
+      nohup "$FORWARDER_BIN" -c "$CONFIG_PATH" >"$LOG_PATH" 2>&1 &
+      ;;
+    *)
+      nohup "$SINGBOX_BIN" run -c "$CONFIG_PATH" >"$LOG_PATH" 2>&1 &
+      ;;
+  esac
   echo "$!" >"$PID_PATH"
 }
 
@@ -816,7 +970,7 @@ delete_iptables_rules() {
 }
 
 status() {
-  log "device=$DEVICE client=$CLIENT_IP redirect_listen=$REDIRECT_LISTEN transparent_port=$TRANSPARENT_PORT backend=${WARP_BACKEND_EFFECTIVE:-$WARP_BACKEND} warp_proxy=$WARP_PROXY_HOST:$WARP_PROXY_PORT"
+  log "device=$DEVICE client=$CLIENT_IP redirect_listen=$REDIRECT_LISTEN transparent_port=$TRANSPARENT_PORT backend=${WARP_BACKEND_EFFECTIVE:-$WARP_BACKEND} forwarder=${FORWARDER_TYPE:-unknown} warp_proxy=$WARP_PROXY_HOST:$WARP_PROXY_PORT"
   if systemd_available; then
     systemctl is-active "$UNIT_NAME" 2>/dev/null || true
   elif [ -r "$PID_PATH" ]; then
@@ -832,7 +986,6 @@ main() {
 
   case "$ACTION" in
     up)
-      resolve_singbox
       select_warp_backend
       write_singbox_config
       start_singbox
@@ -849,7 +1002,6 @@ main() {
       status
       ;;
     probe)
-      resolve_singbox
       select_warp_backend
       log "WARP backend probe succeeded: ${WARP_BACKEND_EFFECTIVE:-$WARP_BACKEND}"
       if [ "${WARP_BACKEND_EFFECTIVE:-}" = "wireguard" ]; then
