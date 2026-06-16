@@ -13,6 +13,7 @@
 - Debian/Ubuntu 安装流程遇到失效的 `*-backports` apt 源时，会备份并禁用对应源条目后自动重试，避免 Debian 11 纯 IPv6 小鸡因过期 backports 源直接部署失败。
 - 优化 WARP 转发安装：官方 WARP SOCKS 端口短暂未就绪时会等待重试；Debian/Ubuntu 节点优先使用系统仓库 `redsocks` 做 SOCKS 透明转发，减少纯 IPv6 小鸡因无法访问 GitHub API 而下载 sing-box 失败的问题。
 - `singbox_install.sh` 查询 GitHub latest API 失败时会回退到固定 sing-box 版本直链，避免仅因 GitHub API 不通直接中断。
+- 修复新增节点后重启本地代理时，旧 dual 节点的 WARP 端口未被识别为已托管端口，导致误报 `address already in use` 的问题。
 
 ## v0.1.10
 

@@ -13,6 +13,7 @@
 - Debian/Ubuntu installers now back up and disable unavailable `*-backports` apt source entries, then retry `apt-get update`, avoiding deployment failures on Debian 11 IPv6-only nodes with stale backports repositories.
 - Improved WARP forwarding setup: official WARP SOCKS readiness is retried, and Debian/Ubuntu nodes now prefer repository `redsocks` for SOCKS transparent forwarding to avoid sing-box download failures when GitHub API is unreachable on IPv6-only nodes.
 - `singbox_install.sh` now falls back to a pinned sing-box release URL when the GitHub latest-release API cannot be queried.
+- Fixed local proxy restart after adding a node: WARP inbound ports from existing `dual` nodes are now treated as managed ports, avoiding false `address already in use` errors.
 
 ## v0.1.10
 
