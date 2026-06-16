@@ -10,6 +10,7 @@
 - `node remove` 现在会先输出所选节点信息，并要求 `y/N` 确认，默认 `N`；确认后会刷新/停止本地代理并默认清理本地 WireGuard 客户端配置。
 - 新增纯 IPv6 出口节点 `direct` 模式支持：IPv6 WireGuard endpoint 自动加中括号，自动生成 IPv6 隧道地址，并在节点侧开启 IPv6 forwarding 与 `ip6tables` MASQUERADE。
 - Pull/Deploy Token 安装脚本会正确格式化 IPv6 字面量主服务器 URL，并优先使用支持 IPv6 的公网端点检测。
+- Debian/Ubuntu 安装流程遇到失效的 `*-backports` apt 源时，会备份并禁用对应源条目后自动重试，避免 Debian 11 纯 IPv6 小鸡因过期 backports 源直接部署失败。
 
 ## v0.1.10
 

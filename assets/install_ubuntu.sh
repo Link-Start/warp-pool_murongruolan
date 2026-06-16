@@ -55,6 +55,82 @@ cleanup_package_cache() {
   fi
 }
 
+disable_apt_backports_sources() {
+  local backup_dir file tmp changed safe_name
+  backup_dir="/etc/apt/warppool-disabled-backports-$(date +%Y%m%d%H%M%S)"
+  changed=0
+
+  for file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+    [ -f "$file" ] || continue
+    if grep -Eq '^[[:space:]]*deb(-src)?[[:space:]].*-backports([[:space:]]|$)' "$file"; then
+      mkdir -p "$backup_dir"
+      safe_name="$(printf '%s' "$file" | sed 's#/#_#g')"
+      cp "$file" "$backup_dir/$safe_name"
+      sed -i -E '/^[[:space:]]*deb(-src)?[[:space:]].*-backports([[:space:]]|$)/ s|^[[:space:]]*|# warppool-disabled-backports: |' "$file"
+      changed=$((changed + 1))
+      log "disabled stale backports apt source: $file (backup: $backup_dir/$safe_name)"
+    fi
+  done
+
+  for file in /etc/apt/sources.list.d/*.sources; do
+    [ -f "$file" ] || continue
+    if grep -Eq '^[[:space:]]*Suites:[[:space:]].*-backports([[:space:]]|$)' "$file"; then
+      mkdir -p "$backup_dir"
+      safe_name="$(printf '%s' "$file" | sed 's#/#_#g')"
+      cp "$file" "$backup_dir/$safe_name"
+      tmp="$(mktemp)"
+      awk '
+        /^Suites:[[:space:]]/ {
+          out = "Suites:"
+          for (i = 2; i <= NF; i++) {
+            if ($i !~ /-backports$/) {
+              out = out " " $i
+            }
+          }
+          print out
+          next
+        }
+        { print }
+      ' "$file" >"$tmp"
+      cat "$tmp" >"$file"
+      rm -f "$tmp"
+      changed=$((changed + 1))
+      log "removed stale backports suite from apt source: $file (backup: $backup_dir/$safe_name)"
+    fi
+  done
+
+  [ "$changed" -gt 0 ]
+}
+
+apt_get_update() {
+  local output status
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: env DEBIAN_FRONTEND=noninteractive apt-get update"
+    return 0
+  fi
+
+  output="$(mktemp)"
+  if env DEBIAN_FRONTEND=noninteractive apt-get update 2>&1 | tee "$output"; then
+    rm -f "$output"
+    return 0
+  else
+    status=$?
+  fi
+
+  if grep -Eiq 'backports' "$output" && grep -Eiq 'Release file|no longer has a Release file|does not have a Release file|404[[:space:]]+Not Found' "$output"; then
+    log "apt update failed because a backports repository is unavailable; disabling backports entries and retrying"
+    if disable_apt_backports_sources; then
+      rm -f "$output"
+      env DEBIAN_FRONTEND=noninteractive apt-get update
+      return $?
+    fi
+    log "warning: apt update mentioned backports, but no editable backports source entry was found"
+  fi
+
+  rm -f "$output"
+  return "$status"
+}
+
 parse_args() {
   for arg in "$@"; do
     case "$arg" in
@@ -87,7 +163,7 @@ normalize_language() {
 
 install_packages() {
   log "installing WireGuard tools and base tools"
-  run env DEBIAN_FRONTEND=noninteractive apt-get update
+  apt_get_update
   run env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends wireguard-tools iproute2 iptables curl ca-certificates coreutils
   cleanup_package_cache
 }

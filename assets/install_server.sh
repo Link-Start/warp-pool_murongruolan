@@ -141,6 +141,82 @@ cleanup_package_cache() {
   fi
 }
 
+disable_apt_backports_sources() {
+  local backup_dir file tmp changed safe_name
+  backup_dir="/etc/apt/warppool-disabled-backports-$(date +%Y%m%d%H%M%S)"
+  changed=0
+
+  for file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+    [ -f "$file" ] || continue
+    if grep -Eq '^[[:space:]]*deb(-src)?[[:space:]].*-backports([[:space:]]|$)' "$file"; then
+      mkdir -p "$backup_dir"
+      safe_name="$(printf '%s' "$file" | sed 's#/#_#g')"
+      cp "$file" "$backup_dir/$safe_name"
+      sed -i -E '/^[[:space:]]*deb(-src)?[[:space:]].*-backports([[:space:]]|$)/ s|^[[:space:]]*|# warppool-disabled-backports: |' "$file"
+      changed=$((changed + 1))
+      log_i "disabled stale backports apt source: $file (backup: $backup_dir/$safe_name)" "已禁用失效 backports apt 源：$file（备份：$backup_dir/$safe_name）"
+    fi
+  done
+
+  for file in /etc/apt/sources.list.d/*.sources; do
+    [ -f "$file" ] || continue
+    if grep -Eq '^[[:space:]]*Suites:[[:space:]].*-backports([[:space:]]|$)' "$file"; then
+      mkdir -p "$backup_dir"
+      safe_name="$(printf '%s' "$file" | sed 's#/#_#g')"
+      cp "$file" "$backup_dir/$safe_name"
+      tmp="$(mktemp)"
+      awk '
+        /^Suites:[[:space:]]/ {
+          out = "Suites:"
+          for (i = 2; i <= NF; i++) {
+            if ($i !~ /-backports$/) {
+              out = out " " $i
+            }
+          }
+          print out
+          next
+        }
+        { print }
+      ' "$file" >"$tmp"
+      cat "$tmp" >"$file"
+      rm -f "$tmp"
+      changed=$((changed + 1))
+      log_i "removed stale backports suite from apt source: $file (backup: $backup_dir/$safe_name)" "已从 apt 源移除失效 backports suite：$file（备份：$backup_dir/$safe_name）"
+    fi
+  done
+
+  [ "$changed" -gt 0 ]
+}
+
+apt_get_update() {
+  local output status
+  if [ "$DRY_RUN" = "true" ]; then
+    log_i "dry-run: env DEBIAN_FRONTEND=noninteractive apt-get update" "dry-run：env DEBIAN_FRONTEND=noninteractive apt-get update"
+    return 0
+  fi
+
+  output="$(mktemp)"
+  if env DEBIAN_FRONTEND=noninteractive apt-get update 2>&1 | tee "$output"; then
+    rm -f "$output"
+    return 0
+  else
+    status=$?
+  fi
+
+  if grep -Eiq 'backports' "$output" && grep -Eiq 'Release file|no longer has a Release file|does not have a Release file|404[[:space:]]+Not Found' "$output"; then
+    log_i "apt update failed because a backports repository is unavailable; disabling backports entries and retrying" "apt update 因 backports 源不可用失败，正在禁用 backports 源并重试"
+    if disable_apt_backports_sources; then
+      rm -f "$output"
+      env DEBIAN_FRONTEND=noninteractive apt-get update
+      return $?
+    fi
+    log_i "warning: apt update mentioned backports, but no editable backports source entry was found" "警告：apt update 提到了 backports，但没有找到可修改的 backports 源条目"
+  fi
+
+  rm -f "$output"
+  return "$status"
+}
+
 require_root() {
   if [ "$(id -u)" -ne 0 ]; then
     fail_i "installer must run as root; use: wget -qO- <url> | sudo bash" "安装脚本必须以 root 权限运行；用法：wget -qO- <url> | sudo bash"
@@ -337,7 +413,7 @@ install_base_packages() {
   log_i "installing base packages" "正在安装基础软件包"
   case "$OS_ID" in
     debian|ubuntu)
-      run env DEBIAN_FRONTEND=noninteractive apt-get update
+      apt_get_update
       run env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl wget tar wireguard-tools iproute2 iptables systemd
       cleanup_package_cache
       ;;
