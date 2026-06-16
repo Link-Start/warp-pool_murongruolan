@@ -30,10 +30,10 @@ func Clash(cfg config.Config, opts ClashOptions) (string, error) {
 			return "", err
 		}
 
-		fmt.Fprintf(&b, "\n- name: %s\n", quoteYAML(clashName(node)))
-		fmt.Fprintf(&b, "  type: %s\n", proxyType)
-		fmt.Fprintf(&b, "  server: %s\n", node.BindHost)
-		fmt.Fprintf(&b, "  port: %d\n", node.LocalPort)
+		writeClashProxy(&b, clashName(node, ""), proxyType, node.BindHost, node.LocalPort)
+		if node.ExitMode == config.ExitModeDual {
+			writeClashProxy(&b, clashName(node, "WARP"), proxyType, node.BindHost, node.WarpLocalPort)
+		}
 	}
 
 	return b.String(), nil
@@ -61,10 +61,20 @@ func clashProxyType(nodeProxy string, override string) (string, error) {
 	}
 }
 
-func clashName(node config.Node) string {
+func writeClashProxy(b *strings.Builder, name string, proxyType string, host string, port int) {
+	fmt.Fprintf(b, "\n- name: %s\n", quoteYAML(name))
+	fmt.Fprintf(b, "  type: %s\n", proxyType)
+	fmt.Fprintf(b, "  server: %s\n", host)
+	fmt.Fprintf(b, "  port: %d\n", port)
+}
+
+func clashName(node config.Node, variant string) string {
 	prefix := "WarpPool"
 	if node.ExitMode == config.ExitModeWarp {
 		prefix = "WARP"
+	}
+	if variant != "" {
+		prefix = variant
 	}
 
 	parts := []string{prefix}
@@ -72,6 +82,9 @@ func clashName(node config.Node) string {
 		parts = append(parts, node.Country)
 	}
 	parts = append(parts, node.Name)
+	if node.ExitMode == config.ExitModeDual && variant == "" {
+		parts = append(parts, "direct")
+	}
 
 	name := strings.Join(parts, "-")
 	name = unsafeProxyNameChars.ReplaceAllString(name, "-")

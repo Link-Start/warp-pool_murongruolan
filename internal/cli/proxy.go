@@ -49,6 +49,9 @@ func buildProxyConfig(cfg config.Config, opts singbox.Options, mode proxyConfigM
 		ignored = map[string]bool{}
 		for _, node := range cfg.Nodes {
 			ignored[singbox.InboundTag(node.Name)] = true
+			if node.ExitMode == config.ExitModeDual {
+				ignored[singbox.WarpInboundTag(node.Name)] = true
+			}
 		}
 	}
 	if err := singbox.CheckInboundPortsExcept(data, ignored); err != nil {

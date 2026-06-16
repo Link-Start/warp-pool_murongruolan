@@ -23,6 +23,12 @@ func TestRenderListenService(t *testing.T) {
 	}
 }
 
+func TestListenURLFormatsIPv6Literal(t *testing.T) {
+	if got := listenURL("2001:db8::1", 8080); got != "http://[2001:db8::1]:8080" {
+		t.Fatalf("unexpected ipv6 listen url: %s", got)
+	}
+}
+
 func TestListenStartUsesConfiguredLanguage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.Default()

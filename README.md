@@ -14,6 +14,7 @@ WireGuard-based multi-exit proxy management for small VPS and NAT VPS nodes.
 - [Installation](#installation)
 - [Quick Start: Push Deployment with Direct Mode](#quick-start-push-deployment-with-direct-mode)
 - [WARP Mode](#warp-mode)
+- [Dual Mode](#dual-mode)
 - [Pull Deployment](#pull-deployment)
 - [Deploy Token](#deploy-token)
 - [Commands](#commands)
@@ -33,6 +34,7 @@ Exit mode:
 
 - `direct`: traffic exits through the node's own network.
 - `warp`: traffic exits through Cloudflare WARP on the node.
+- `dual`: one exit node exposes both direct and WARP local proxy ports.
 
 Typical flow:
 
@@ -53,6 +55,7 @@ Application
 - WireGuard tunnel generation and deployment
 - SSH Push deployment for exit nodes
 - Optional Cloudflare WARP egress
+- `dual` mode: one node can provide both direct and WARP egress ports
 - User-defined local proxy ports
 - `socks5`, `http`, and `mixed` local proxy modes
 - sing-box config generation and process management
@@ -97,9 +100,11 @@ Exit node
 | Debian 11+ | Supported |
 | Alpine 3.20+ | Supported |
 
-WARP mode is supported on Ubuntu/Debian and Alpine. Ubuntu/Debian use the official Cloudflare WARP client when available. Alpine uses `wgcf` to generate a WARP WireGuard profile and sing-box's embedded WireGuard endpoint. On Alpine, WarpPool first runs `apk update` and installs `sing-box` from the Alpine package repository when available; if the package is unavailable, cannot run, or cannot load the generated WARP config, WarpPool falls back to the GitHub musl build.
+WARP mode is supported on Ubuntu/Debian and Alpine. Ubuntu/Debian use the official Cloudflare WARP client when available and prefer repository `redsocks` for WARP SOCKS transparent forwarding, reducing GitHub API dependency on IPv6-only nodes; if `redsocks` is unavailable, WarpPool falls back to sing-box. Alpine uses `wgcf` to generate a WARP WireGuard profile and sing-box's embedded WireGuard endpoint. On Alpine, WarpPool first runs `apk update` and installs `sing-box` from the Alpine package repository when available; if the package is unavailable, cannot run, or cannot load the generated WARP config, WarpPool falls back to the GitHub musl build.
 
 Recommended disk size: around 1 GB. The installer is optimized for small disks by installing only required WireGuard tools, avoiding the WireGuard meta package on Debian/Ubuntu, and cleaning package caches after installation steps.
+
+Debian/Ubuntu installers detect unavailable `*-backports` apt sources. If an expired backports repository on systems such as Debian 11 breaks `apt-get update`, WarpPool backs up the source file, disables the backports entry, and retries automatically.
 
 ### CPU Architecture
 
@@ -122,7 +127,7 @@ Exit node:
 
 - Root SSH access
 - `/dev/net/tun`
-- IPv4 connectivity
+- IPv4 or IPv6 connectivity. IPv6-only exit nodes can be used with `direct` mode; WARP mode depends on the node OS and Cloudflare WARP availability.
 - `apt` or `apk` package manager depending on OS
 
 ---
@@ -186,6 +191,16 @@ WireGuard ports are split into two values:
 - `wg-endpoint-port`: the public port used by the main server to connect to the exit node. On NAT VPS nodes, this is often different from the node-side listen port.
 
 Push mode asks for the SSH port, the node-side WireGuard listen port, and the public WireGuard mapped port. NAT nodes commonly use non-standard SSH and UDP mapped ports, so enter the real forwarded ports from your provider.
+
+IPv6-only exit nodes are supported for `direct` mode when the main server can reach the node over IPv6. Enter bare IPv6 addresses in interactive fields:
+
+```text
+SSH host/IP: 2001:db8::10
+WireGuard public endpoint host/IP: 2001:db8::10
+WireGuard public endpoint port: 51820
+```
+
+WarpPool automatically writes the WireGuard endpoint as `[2001:db8::10]:51820` and adds an IPv6 ULA address pair to the tunnel. The exit node enables IPv6 forwarding and `ip6tables` MASQUERADE for direct IPv6 egress. If the main server registration listener itself uses a literal IPv6 address, generated URLs use `http://[IPv6]:port`; using an AAAA domain is still recommended for easier operation.
 
 By default, SSH host key verification is enabled. If the default `known_hosts` file does not exist during interactive deployment, WarpPool asks whether to skip SSH HostKey verification for this deployment. For non-interactive deployment or temporary tests, pass:
 
@@ -252,6 +267,8 @@ curl --socks5 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace
 
 Current limitation: WARP forwarding is TCP-first. UDP and IPv6 are not promised as complete yet.
 
+On Ubuntu/Debian, WARP forwarding first reuses the official Cloudflare WARP local SOCKS port `127.0.0.1:40000`. If the port is not ready immediately, the helper waits and retries. The forwarding component prefers repository `redsocks` and only falls back to sing-box when `redsocks` is unavailable. This lets most IPv6-only Debian/Ubuntu nodes complete WARP forwarding without querying the GitHub API.
+
 On Alpine, WARP mode uses:
 
 ```text
@@ -276,9 +293,57 @@ WARP mode is optimized for 1 GB-class small disk nodes. WarpPool installs WARP-s
 
 ---
 
+## Dual Mode
+
+`dual` mode lets one exit node expose both direct and WARP local proxy ports:
+
+```text
+127.0.0.1:<direct-port> -> WireGuard direct client address -> node's own network
+127.0.0.1:<warp-port>   -> WireGuard WARP client address   -> node WARP
+```
+
+Push deployment example:
+
+```bash
+warppool deploy \
+  --name nat01 \
+  --exit-mode dual \
+  --proxy mixed \
+  --port 10133 \
+  --warp-port 10134 \
+  --ssh-host 203.0.113.10 \
+  --ssh-user root \
+  --wg-listen-port 51820 \
+  --wg-endpoint-port 30021
+```
+
+In interactive deployment, selecting `dual/direct+warp` asks for:
+
+- direct local proxy port
+- WARP local proxy port
+
+Both ports are checked for availability. They must be different and must not conflict with existing nodes or unused Deploy Tokens.
+
+Test:
+
+```bash
+curl -x socks5h://127.0.0.1:10133 https://api.ipify.org # direct egress
+curl -x socks5h://127.0.0.1:10134 https://api.ipify.org # WARP egress
+```
+
+Notes:
+
+- `dual` uses the same remote WireGuard listen port, so NAT VPS users do not need a second UDP mapping.
+- The exit node routes by WireGuard client source address: the direct address goes to the node network, and the WARP address goes to Cloudflare WARP.
+- IPv6-only exit nodes can use `dual`; enter the node's bare IPv6 address when the main server connects to the node. The direct port exits through the node's IPv6 network, while the WARP port exits through Cloudflare WARP.
+- `warppool ping <node>` checks both local proxy ports in dual mode.
+- Existing single-mode nodes cannot become dual by changing local config only. Redeploy the node, or later use the configuration refresh flow to push dual WireGuard metadata.
+
+---
+
 ## Pull Deployment
 
-Recommended flow: run `warppool deploy-token` on the main server first, then copy the generated one-line install command to the exit node. This makes the main server the source of truth for node name, exit mode, local proxy protocol, and local proxy port. The exit node only provides node-side WireGuard/NAT endpoint information.
+Recommended flow: run `warppool deploy-token` on the main server first, then copy the generated one-line install command to the exit node. This makes the main server the source of truth for node name, exit mode, local proxy protocol, and local proxy port. The exit node only provides node-side WireGuard/NAT endpoint information. In `dual` mode, the main server asks for both direct and WARP local proxy ports.
 
 If you run the node installer directly on the exit node:
 
@@ -289,9 +354,11 @@ wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/i
 The script enters a manual setup menu:
 
 1. Enter the main server IP/domain. Press Enter to install node dependencies only.
-2. If a main server address is entered, enter the registration port. IPv4 defaults to `8080`; domains default to `80`.
+2. If a main server address is entered, enter the registration port. IPv4/IPv6 literals default to `8080`; domains default to `80`.
 3. Enter a Deploy Token if auto registration is needed.
 4. For auto registration, enter the node-side WireGuard listen port and the public UDP port used by the main server.
+
+For IPv6-only exit nodes, manually enter the node's public IPv6 when asked for the WireGuard public endpoint. Do not include brackets in the prompt; the installer and server format the endpoint automatically.
 
 If the main server IP or Deploy Token is left empty, the script only installs node dependencies. It will not write WireGuard config and will not create a node record on the main server. You can later run `warppool deploy-token` on the main server and execute the generated one-line command on the node.
 
@@ -309,6 +376,12 @@ For auto registration, normally use the command printed by `warppool deploy-toke
 
 ```bash
 wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- token=<token> server=http://<main-server-ip>:8080
+```
+
+If the main server is reached by literal IPv6, use bracketed URL syntax:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/murongruolan/warp-pool/main/assets/install.sh | sudo bash -s -- token=<token> server=http://[2001:db8::1]:8080
 ```
 
 The node first reads the exit mode stored in the Deploy Token from the main server, then decides whether WARP should be installed.
@@ -329,12 +402,12 @@ Generate token command:
 warppool deploy-token
 ```
 
-The command asks for node name, exit mode, proxy protocol, and local proxy port. It then prints the Deploy Token plus a one-line node installation command. The exit node uses that command to request WireGuard config, start WireGuard, and complete registration. After registration, the main server starts the local proxy service automatically.
+The command asks for node name, exit mode, proxy protocol, and local proxy port. In `dual` mode, it also asks for the WARP local proxy port. It then prints the Deploy Token plus a one-line node installation command. The exit node uses that command to request WireGuard config, start WireGuard, and complete registration. After registration, the main server starts the local proxy service automatically.
 
 To avoid duplicate configuration, Deploy Token uses these sources of truth:
 
-- Main server: node name, exit mode, proxy protocol, local proxy port.
-- Exit node: node-side WireGuard listen port, auto-detected or manually entered public endpoint, and NAT-mapped public UDP port.
+- Main server: node name, exit mode, proxy protocol, local proxy port; in dual mode, also the WARP local proxy port.
+- Exit node: node-side WireGuard listen port, auto-detected or manually entered public endpoint, and NAT-mapped public UDP port. For IPv6-only nodes, enter the public IPv6 as the endpoint host/IP.
 
 For NAT VPS nodes where the public UDP mapping differs from the node-side WireGuard listen port, run the generated install command on the exit node and enter the provider-mapped public UDP port when prompted.
 
@@ -352,8 +425,10 @@ warppool node stop nat01 # Stop local proxy service
 warppool node status nat01 # Show node nat01 runtime status
 warppool node mode nat01 warp # Switch nat01 to WARP egress; auto-detect and install/reuse WARP
 warppool node mode nat01 direct # Switch nat01 back to direct egress
-warppool remove nat01 # Remove node nat01 record only
-warppool node remove nat01 --clean-wg # Remove node nat01 and delete local WG client config
+warppool deploy --exit-mode dual # Deploy a new node with both direct and WARP ports
+warppool remove nat01 # Remove nat01, confirm first, refresh/stop local proxy, and clean local WG client config
+warppool node remove nat01 -y # Remove nat01 without confirmation
+warppool node remove nat01 --clean-wg=false # Remove node and refresh local proxy, but keep local WG client config
 ```
 
 Short alias examples:
@@ -365,7 +440,7 @@ wpl ping nat01
 wpl upgrade --yes
 ```
 
-`remove` only removes the node record. Add `--clean-wg` when you also want to stop and delete the local WireGuard client config on the main server.
+`warppool node remove` / `wpl node remove` prints the selected node details first and asks for `y/N` confirmation, defaulting to `N`. After confirmation, it removes the node from config and rewrites/restarts the local proxy. If no nodes remain, it stops the local proxy and removes the stale sing-box config so the local proxy port is released.
 
 `warppool node mode` defaults to Pull mode and prints a command to run on the exit node. The exit node detects WARP automatically: reuse it when already installed, otherwise install it. Advanced options:
 
@@ -411,7 +486,7 @@ warppool export clash -o clash.yaml # Export Clash-compatible config
 ```bash
 warppool version # Show version information
 warppool doctor # Check local runtime and port status
-warppool ping nat01 # Test node latency target, direct HTTP latency, and proxy egress IP/latency
+warppool ping nat01 # Test node latency target, direct HTTP latency, and proxy egress IP/latency; dual mode checks both proxy ports
 warppool upgrade --yes # Upgrade binary and bundled installer assets
 warppool speedtest --proxy http://127.0.0.1:10133 # Run a simple speed test through a proxy
 ```

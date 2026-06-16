@@ -192,6 +192,32 @@ func (p promptIO) askBool(label string, current bool, def bool) (bool, error) {
 	}
 }
 
+func (p promptIO) askConfirmDefaultNo(label string, current bool) (bool, error) {
+	if current {
+		return true, nil
+	}
+	reader := bufio.NewReader(p.in)
+	for {
+		fmt.Fprintf(p.out, "%s [y/N]: ", label)
+		value, err := reader.ReadString('\n')
+		if err != nil {
+			return false, fmt.Errorf("read %s: %w", label, err)
+		}
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			return false, nil
+		}
+		switch value {
+		case "y", "yes":
+			return true, nil
+		case "n", "no":
+			return false, nil
+		default:
+			fmt.Fprintln(p.out, p.msg("enter y or n", "请输入 y 或 n"))
+		}
+	}
+}
+
 func (p promptIO) askMenu(label string, current string, def string, options []menuOption) (string, error) {
 	if strings.TrimSpace(current) != "" {
 		return current, nil

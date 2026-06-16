@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+## v0.1.11
+
+- Added `dual` deployment mode: one exit node can expose both direct and WARP local proxy ports.
+- `warppool deploy` and `warppool deploy-token` can select `dual/direct+warp` and validate both local ports.
+- `warppool ping` checks both direct and WARP proxy ports for dual nodes.
+- Clash export emits separate direct and WARP proxy entries for dual nodes.
+- Fixed `warppool node remove` / `wpl node remove` removing only the node record without refreshing the local proxy, which left proxy ports occupied.
+- `node remove` now prints the selected node details and asks for `y/N` confirmation, defaulting to `N`; after confirmation it refreshes/stops the local proxy and cleans local WireGuard client config by default.
+- Added IPv6-only exit node support for `direct` mode: IPv6 WireGuard endpoints are bracketed automatically, IPv6 tunnel addresses are generated, and node-side direct forwarding now enables IPv6 forwarding plus `ip6tables` MASQUERADE.
+- Pull/Deploy Token install scripts now format literal IPv6 main-server URLs correctly and prefer IPv6-capable endpoint detection.
+- Debian/Ubuntu installers now back up and disable unavailable `*-backports` apt source entries, then retry `apt-get update`, avoiding deployment failures on Debian 11 IPv6-only nodes with stale backports repositories.
+- Improved WARP forwarding setup: official WARP SOCKS readiness is retried, and Debian/Ubuntu nodes now prefer repository `redsocks` for SOCKS transparent forwarding to avoid sing-box download failures when GitHub API is unreachable on IPv6-only nodes.
+- `singbox_install.sh` now falls back to a pinned sing-box release URL when the GitHub latest-release API cannot be queried.
+- Fixed local proxy restart after adding a node: WARP inbound ports from existing `dual` nodes are now treated as managed ports, avoiding false `address already in use` errors.
+
 ## v0.1.10
 
 - Added the short command alias `wpl`, equivalent to `warppool`, for example `wpl node list` and `wpl ping nat01`.

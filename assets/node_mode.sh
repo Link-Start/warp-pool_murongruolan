@@ -8,6 +8,8 @@ NODE_NAME=""
 WG_DEVICE=""
 WG_SERVER_ADDR=""
 WG_CLIENT_ADDR=""
+WG_SERVER_IPV6_ADDR=""
+WG_CLIENT_IPV6_ADDR=""
 WARP_INSTALL="auto"
 REMOVE_WARP="false"
 TRANSPARENT_PORT="14000"
@@ -81,6 +83,8 @@ parse_args() {
       device=*) WG_DEVICE="${arg#device=}" ;;
       client_addr=*) WG_CLIENT_ADDR="${arg#client_addr=}" ;;
       server_addr=*) WG_SERVER_ADDR="${arg#server_addr=}" ;;
+      client_ipv6_addr=*) WG_CLIENT_IPV6_ADDR="${arg#client_ipv6_addr=}" ;;
+      server_ipv6_addr=*) WG_SERVER_IPV6_ADDR="${arg#server_ipv6_addr=}" ;;
       warp_install=*) WARP_INSTALL="${arg#warp_install=}" ;;
       remove_warp=*) REMOVE_WARP="${arg#remove_warp=}" ;;
       transparent_port=*) TRANSPARENT_PORT="${arg#transparent_port=}" ;;
@@ -116,6 +120,27 @@ normalize_current_language() {
   else
     LANGUAGE="en"
   fi
+}
+
+is_ipv6_literal() {
+  local value="$1"
+  value="${value#[}"
+  value="${value%]}"
+  case "$value" in
+    *:*) return 0 ;;
+  esac
+  return 1
+}
+
+format_http_host() {
+  local value="$1"
+  value="${value#[}"
+  value="${value%]}"
+  if is_ipv6_literal "$value"; then
+    printf '[%s]\n' "$value"
+    return 0
+  fi
+  printf '%s\n' "$value"
 }
 
 run() {
@@ -190,6 +215,8 @@ load_state() {
   [ -n "$WG_DEVICE" ] || WG_DEVICE="$(json_get wg_device "$STATE_PATH" || true)"
   [ -n "$WG_SERVER_ADDR" ] || WG_SERVER_ADDR="$(json_get wg_server_address "$STATE_PATH" || true)"
   [ -n "$WG_CLIENT_ADDR" ] || WG_CLIENT_ADDR="$(json_get wg_client_address "$STATE_PATH" || true)"
+  [ -n "$WG_SERVER_IPV6_ADDR" ] || WG_SERVER_IPV6_ADDR="$(json_get wg_server_ipv6_address "$STATE_PATH" || true)"
+  [ -n "$WG_CLIENT_IPV6_ADDR" ] || WG_CLIENT_IPV6_ADDR="$(json_get wg_client_ipv6_address "$STATE_PATH" || true)"
   [ -n "$LANGUAGE" ] || LANGUAGE="$(json_get language "$STATE_PATH" || true)"
   normalize_current_language
 }
@@ -206,15 +233,17 @@ prompt_server_if_needed() {
   read -r host </dev/tty
   [ -n "$host" ] || fail_i "main server IP/domain is required" "主服务器 IP/域名不能为空"
   port="8080"
-  case "$host" in
-    *[!0-9.]*)
-      port="80"
-      ;;
-  esac
+  if ! is_ipv6_literal "$host"; then
+    case "$host" in
+      *[!0-9.]*)
+        port="80"
+        ;;
+    esac
+  fi
   printf '%s' "$(text "Main server registration port [$port]: " "主服务器注册端口 [$port]: ")" >/dev/tty
   read -r input </dev/tty
   port="${input:-$port}"
-  SERVER="http://$host:$port"
+  SERVER="http://$(format_http_host "$host"):$port"
 }
 
 load_mode_response() {
@@ -226,6 +255,8 @@ load_mode_response() {
   WG_DEVICE_B64=""
   WG_SERVER_ADDR_B64=""
   WG_CLIENT_ADDR_B64=""
+  WG_SERVER_IPV6_ADDR_B64=""
+  WG_CLIENT_IPV6_ADDR_B64=""
   WARP_INSTALL_B64=""
   REMOVE_WARP="0"
   eval "$response"
@@ -237,6 +268,8 @@ load_mode_response() {
   WG_DEVICE="$(printf '%s' "$WG_DEVICE_B64" | decode_b64)"
   WG_SERVER_ADDR="$(printf '%s' "$WG_SERVER_ADDR_B64" | decode_b64)"
   WG_CLIENT_ADDR="$(printf '%s' "$WG_CLIENT_ADDR_B64" | decode_b64)"
+  WG_SERVER_IPV6_ADDR="$(printf '%s' "$WG_SERVER_IPV6_ADDR_B64" | decode_b64)"
+  WG_CLIENT_IPV6_ADDR="$(printf '%s' "$WG_CLIENT_IPV6_ADDR_B64" | decode_b64)"
   WARP_INSTALL="$(printf '%s' "$WARP_INSTALL_B64" | decode_b64)"
   [ -n "$WARP_INSTALL" ] || WARP_INSTALL="auto"
   if [ "$REMOVE_WARP" = "1" ]; then
@@ -300,11 +333,19 @@ helper_path() {
 }
 
 detect_egress_interface() {
-  ip route show default 0.0.0.0/0 | awk 'NR==1 {for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}'
+  (ip route show default 0.0.0.0/0 2>/dev/null; ip -6 route show default 2>/dev/null) | awk 'NR==1 {for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}'
 }
 
 client_ip() {
   printf '%s' "${WG_CLIENT_ADDR%%/*}"
+}
+
+client_ip6() {
+  printf '%s' "${WG_CLIENT_IPV6_ADDR%%/*}"
+}
+
+has_ipv6_wireguard() {
+  [ -n "$WG_CLIENT_IPV6_ADDR" ] && [ -n "$WG_SERVER_IPV6_ADDR" ]
 }
 
 remove_direct_forwarding() {
@@ -322,6 +363,21 @@ remove_direct_forwarding() {
     while iptables -t nat -C POSTROUTING -s "$cip/32" -o "$egress" -j MASQUERADE >/dev/null 2>&1; do
       run iptables -t nat -D POSTROUTING -s "$cip/32" -o "$egress" -j MASQUERADE
     done
+  fi
+  if has_ipv6_wireguard && command -v ip6tables >/dev/null 2>&1; then
+    local cip6
+    cip6="$(client_ip6)"
+    while ip6tables -C FORWARD -i "$WG_DEVICE" -j ACCEPT >/dev/null 2>&1; do
+      run ip6tables -D FORWARD -i "$WG_DEVICE" -j ACCEPT
+    done
+    while ip6tables -C FORWARD -o "$WG_DEVICE" -m state --state RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1; do
+      run ip6tables -D FORWARD -o "$WG_DEVICE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+    done
+    if [ -n "$egress" ]; then
+      while ip6tables -t nat -C POSTROUTING -s "$cip6/128" -o "$egress" -j MASQUERADE >/dev/null 2>&1; do
+        run ip6tables -t nat -D POSTROUTING -s "$cip6/128" -o "$egress" -j MASQUERADE
+      done
+    fi
   fi
 }
 
@@ -342,6 +398,8 @@ strip_warppool_post_hooks() {
     /^PostDown = .*WarpPool WARP forwarding disabled/ { next }
     /^PostUp = .*iptables .*FORWARD .*%i/ { next }
     /^PostDown = .*iptables .*FORWARD .*%i/ { next }
+    /^PostUp = .*ip6tables .*FORWARD .*%i/ { next }
+    /^PostDown = .*ip6tables .*FORWARD .*%i/ { next }
     { print }
   ' "$conf" >"$tmp"
   cat "$tmp" >"$conf"
@@ -351,16 +409,21 @@ strip_warppool_post_hooks() {
 
 append_direct_hooks() {
   local conf="/etc/wireguard/$WG_DEVICE.conf"
-  local egress cip post_up post_down
+  local egress cip cip6 post_up post_down
   if [ ! -r "$conf" ]; then
     log "warning: WireGuard config not found: $conf"
     return 0
   fi
   egress="$(detect_egress_interface)"
-  [ -n "$egress" ] || fail "cannot detect default egress interface"
+  [ -n "$egress" ] || fail "cannot detect default IPv4/IPv6 egress interface"
   cip="$(client_ip)"
   post_up="PostUp = sysctl -w net.ipv4.ip_forward=1; iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -i %i -j ACCEPT; iptables -C FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -C POSTROUTING -s $cip/32 -o $egress -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s $cip/32 -o $egress -j MASQUERADE"
   post_down="PostDown = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; iptables -D FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true; iptables -t nat -D POSTROUTING -s $cip/32 -o $egress -j MASQUERADE 2>/dev/null || true"
+  if has_ipv6_wireguard; then
+    cip6="$(client_ip6)"
+    post_up="$post_up; sysctl -w net.ipv6.conf.all.forwarding=1; ip6tables -C FORWARD -i %i -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -i %i -j ACCEPT; ip6tables -C FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT; ip6tables -t nat -C POSTROUTING -s $cip6/128 -o $egress -j MASQUERADE 2>/dev/null || ip6tables -t nat -A POSTROUTING -s $cip6/128 -o $egress -j MASQUERADE"
+    post_down="$post_down; ip6tables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; ip6tables -D FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true; ip6tables -t nat -D POSTROUTING -s $cip6/128 -o $egress -j MASQUERADE 2>/dev/null || true"
+  fi
   if [ "$DRY_RUN" = "true" ]; then
     log "dry-run: append direct PostUp/PostDown hooks to $conf"
     return 0
@@ -387,18 +450,25 @@ append_direct_hooks() {
 }
 
 enable_direct_forwarding() {
-  local egress cip
+  local egress cip cip6
   egress="$(detect_egress_interface)"
-  [ -n "$egress" ] || fail "cannot detect default egress interface"
+  [ -n "$egress" ] || fail "cannot detect default IPv4/IPv6 egress interface"
   cip="$(client_ip)"
   run mkdir -p /etc/sysctl.d
   if [ "$DRY_RUN" != "true" ]; then
-    printf 'net.ipv4.ip_forward=1\n' >/etc/sysctl.d/99-warppool.conf
+    printf 'net.ipv4.ip_forward=1\nnet.ipv6.conf.all.forwarding=1\n' >/etc/sysctl.d/99-warppool.conf
   fi
   run sysctl -w net.ipv4.ip_forward=1
   run iptables -C FORWARD -i "$WG_DEVICE" -j ACCEPT 2>/dev/null || run iptables -A FORWARD -i "$WG_DEVICE" -j ACCEPT
   run iptables -C FORWARD -o "$WG_DEVICE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || run iptables -A FORWARD -o "$WG_DEVICE" -m state --state RELATED,ESTABLISHED -j ACCEPT
   run iptables -t nat -C POSTROUTING -s "$cip/32" -o "$egress" -j MASQUERADE 2>/dev/null || run iptables -t nat -A POSTROUTING -s "$cip/32" -o "$egress" -j MASQUERADE
+  if has_ipv6_wireguard; then
+    cip6="$(client_ip6)"
+    run sysctl -w net.ipv6.conf.all.forwarding=1
+    run ip6tables -C FORWARD -i "$WG_DEVICE" -j ACCEPT 2>/dev/null || run ip6tables -A FORWARD -i "$WG_DEVICE" -j ACCEPT
+    run ip6tables -C FORWARD -o "$WG_DEVICE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || run ip6tables -A FORWARD -o "$WG_DEVICE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+    run ip6tables -t nat -C POSTROUTING -s "$cip6/128" -o "$egress" -j MASQUERADE 2>/dev/null || run ip6tables -t nat -A POSTROUTING -s "$cip6/128" -o "$egress" -j MASQUERADE
+  fi
 }
 
 ensure_warp_ready() {
@@ -457,6 +527,8 @@ write_state() {
   "wg_device": "$WG_DEVICE",
   "wg_server_address": "$WG_SERVER_ADDR",
   "wg_client_address": "$WG_CLIENT_ADDR",
+  "wg_server_ipv6_address": "$WG_SERVER_IPV6_ADDR",
+  "wg_client_ipv6_address": "$WG_CLIENT_IPV6_ADDR",
   "last_mode": "$MODE",
   "language": "$LANGUAGE"
 }

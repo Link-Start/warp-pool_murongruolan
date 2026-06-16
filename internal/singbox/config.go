@@ -87,13 +87,13 @@ func Build(cfg config.Config, opts Options) (Config, error) {
 	}
 
 	for _, node := range cfg.Nodes {
-		inbound, endpoint, rule, err := buildNode(node, opts)
+		inbounds, endpoints, rules, err := buildNode(node, opts)
 		if err != nil {
 			return Config{}, err
 		}
-		out.Inbounds = append(out.Inbounds, inbound)
-		out.Endpoints = append(out.Endpoints, endpoint)
-		out.Route.Rules = append(out.Route.Rules, rule)
+		out.Inbounds = append(out.Inbounds, inbounds...)
+		out.Endpoints = append(out.Endpoints, endpoints...)
+		out.Route.Rules = append(out.Route.Rules, rules...)
 	}
 
 	if len(out.Inbounds) == 0 {
@@ -122,13 +122,62 @@ func InboundTag(nodeName string) string {
 	return "in-" + stableTagComponent(nodeName, 48)
 }
 
-func buildNode(node config.Node, opts Options) (Inbound, Endpoint, RouteRule, error) {
+func WarpInboundTag(nodeName string) string {
+	return "in-warp-" + stableTagComponent(nodeName, 43)
+}
+
+func buildNode(node config.Node, opts Options) ([]Inbound, []Endpoint, []RouteRule, error) {
 	if err := validateNode(node); err != nil {
-		return Inbound{}, Endpoint{}, RouteRule{}, err
+		return nil, nil, nil, err
 	}
 
-	inboundTag := InboundTag(node.Name)
-	endpointTag := "wg-" + stableTagComponent(node.Name, 48)
+	directInbound, directEndpoint, directRule, err := buildNodeVariant(nodeVariant{
+		Node:          node,
+		InboundTag:    InboundTag(node.Name),
+		EndpointTag:   "wg-" + stableTagComponent(node.Name, 48),
+		ListenPort:    node.LocalPort,
+		ClientAddress: node.WGClientAddress,
+		PrivateKey:    node.WGClientPrivateKey,
+		EndpointName:  DefaultEndpointName(node),
+	}, opts)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	inbounds := []Inbound{directInbound}
+	endpoints := []Endpoint{directEndpoint}
+	rules := []RouteRule{directRule}
+	if node.ExitMode == config.ExitModeDual {
+		warpInbound, warpEndpoint, warpRule, err := buildNodeVariant(nodeVariant{
+			Node:          node,
+			InboundTag:    WarpInboundTag(node.Name),
+			EndpointTag:   "wg-warp-" + stableTagComponent(node.Name, 43),
+			ListenPort:    node.WarpLocalPort,
+			ClientAddress: node.WGWarpClientAddress,
+			PrivateKey:    node.WGWarpClientPrivateKey,
+			EndpointName:  DefaultWarpEndpointName(node),
+		}, opts)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		inbounds = append(inbounds, warpInbound)
+		endpoints = append(endpoints, warpEndpoint)
+		rules = append(rules, warpRule)
+	}
+	return inbounds, endpoints, rules, nil
+}
+
+type nodeVariant struct {
+	Node          config.Node
+	InboundTag    string
+	EndpointTag   string
+	ListenPort    int
+	ClientAddress string
+	PrivateKey    string
+	EndpointName  string
+}
+
+func buildNodeVariant(variant nodeVariant, opts Options) (Inbound, Endpoint, RouteRule, error) {
+	node := variant.Node
 	inboundType := node.Proxy
 	if inboundType == config.ProxySocks5 {
 		inboundType = "socks"
@@ -141,33 +190,63 @@ func buildNode(node config.Node, opts Options) (Inbound, Endpoint, RouteRule, er
 
 	inbound := Inbound{
 		Type:       inboundType,
-		Tag:        inboundTag,
+		Tag:        variant.InboundTag,
 		Listen:     node.BindHost,
-		ListenPort: node.LocalPort,
+		ListenPort: variant.ListenPort,
 	}
+	addresses := wireGuardEndpointAddresses(variant.ClientAddress, node)
+	allowedIPs := []string{"0.0.0.0/0"}
+	if hasIPv6Address(addresses) {
+		allowedIPs = append(allowedIPs, "::/0")
+	}
+
 	endpoint := Endpoint{
 		Type:       "wireguard",
-		Tag:        endpointTag,
+		Tag:        variant.EndpointTag,
 		System:     false,
-		Name:       DefaultEndpointName(node),
+		Name:       variant.EndpointName,
 		MTU:        opts.MTU,
-		Address:    []string{node.WGClientAddress},
-		PrivateKey: node.WGClientPrivateKey,
+		Address:    addresses,
+		PrivateKey: variant.PrivateKey,
 		Peers: []EndpointPeer{
 			{
 				Address:             host,
 				Port:                port,
 				PublicKey:           node.WGServerPublicKey,
-				AllowedIPs:          []string{"0.0.0.0/0"},
+				AllowedIPs:          allowedIPs,
 				PersistentKeepalive: 25,
 			},
 		},
 	}
 	rule := RouteRule{
-		Inbound:  []string{inboundTag},
-		Outbound: endpointTag,
+		Inbound:  []string{variant.InboundTag},
+		Outbound: variant.EndpointTag,
 	}
 	return inbound, endpoint, rule, nil
+}
+
+func wireGuardEndpointAddresses(clientAddress string, node config.Node) []string {
+	addresses := []string{clientAddress}
+	switch clientAddress {
+	case node.WGWarpClientAddress:
+		if strings.TrimSpace(node.WGWarpClientIPv6Address) != "" {
+			addresses = append(addresses, node.WGWarpClientIPv6Address)
+		}
+	default:
+		if strings.TrimSpace(node.WGClientIPv6Address) != "" {
+			addresses = append(addresses, node.WGClientIPv6Address)
+		}
+	}
+	return addresses
+}
+
+func hasIPv6Address(addresses []string) bool {
+	for _, address := range addresses {
+		if strings.Contains(strings.Split(address, "/")[0], ":") {
+			return true
+		}
+	}
+	return false
 }
 
 func validateNode(node config.Node) error {
@@ -194,6 +273,28 @@ func validateNode(node config.Node) error {
 	} {
 		if strings.TrimSpace(field.value) == "" {
 			return fmt.Errorf("node %s missing %s; deploy it first", node.Name, field.name)
+		}
+	}
+	if node.ExitMode == config.ExitModeDual {
+		if err := config.ValidatePort(node.WarpLocalPort); err != nil {
+			return fmt.Errorf("node %s warp local port: %w", node.Name, err)
+		}
+		if node.WarpLocalPort == node.LocalPort {
+			return fmt.Errorf("node %s dual mode requires different direct and warp local ports", node.Name)
+		}
+		for _, field := range []struct {
+			name  string
+			value string
+		}{
+			{name: "wg_warp_client_address", value: node.WGWarpClientAddress},
+			{name: "wg_warp_client_private_key", value: node.WGWarpClientPrivateKey},
+		} {
+			if strings.TrimSpace(field.value) == "" {
+				return fmt.Errorf("node %s missing %s; deploy it as dual first", node.Name, field.name)
+			}
+		}
+		if strings.TrimSpace(node.WGClientIPv6Address) != "" && strings.TrimSpace(node.WGWarpClientIPv6Address) == "" {
+			return fmt.Errorf("node %s missing wg_warp_client_ipv6_address; redeploy it as dual first", node.Name)
 		}
 	}
 	return nil
@@ -265,4 +366,8 @@ func DefaultEndpointName(node config.Node) string {
 		return node.WGLocalDevice
 	}
 	return "wpc-" + stableTagComponent(node.Name, 11)
+}
+
+func DefaultWarpEndpointName(node config.Node) string {
+	return "wpcw-" + stableTagComponent(node.Name, 10)
 }

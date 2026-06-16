@@ -194,45 +194,74 @@ EOF_RULES
 
 delete_direct_forwarding_rules() {
   local device="$1"
-  if ! command -v iptables >/dev/null 2>&1; then
+  if ! command -v iptables >/dev/null 2>&1 && ! command -v ip6tables >/dev/null 2>&1; then
     return 0
   fi
   if [ "$DRY_RUN" = "true" ]; then
-    log "dry-run: remove iptables direct forwarding rules for $device"
+    log "dry-run: remove iptables/ip6tables direct forwarding rules for $device"
     return 0
   fi
 
   local rule spec
-  while IFS= read -r rule; do
-    case "$rule" in
-      *" -i $device "*"-j ACCEPT"*|*" -o $device "*"-j ACCEPT"*)
-        spec="${rule#-A FORWARD }"
-        # shellcheck disable=SC2086
-        iptables -D FORWARD $spec >/dev/null 2>&1 || true
-        ;;
-    esac
-  done <<EOF_RULES
+  if command -v iptables >/dev/null 2>&1; then
+    while IFS= read -r rule; do
+      case "$rule" in
+        *" -i $device "*"-j ACCEPT"*|*" -o $device "*"-j ACCEPT"*)
+          spec="${rule#-A FORWARD }"
+          # shellcheck disable=SC2086
+          iptables -D FORWARD $spec >/dev/null 2>&1 || true
+          ;;
+      esac
+    done <<EOF_RULES
 $(iptables -S FORWARD 2>/dev/null || true)
 EOF_RULES
+  fi
 
-  local client_ip=""
+  if command -v ip6tables >/dev/null 2>&1; then
+    while IFS= read -r rule; do
+      case "$rule" in
+        *" -i $device "*"-j ACCEPT"*|*" -o $device "*"-j ACCEPT"*)
+          spec="${rule#-A FORWARD }"
+          # shellcheck disable=SC2086
+          ip6tables -D FORWARD $spec >/dev/null 2>&1 || true
+          ;;
+      esac
+    done <<EOF_RULES
+$(ip6tables -S FORWARD 2>/dev/null || true)
+EOF_RULES
+  fi
+
+  local client_ip="" client_ip6=""
   if [ -r "/etc/wireguard/$device.conf" ]; then
     client_ip="$(awk '/AllowedIPs[[:space:]]*=/ {print $3; exit}' "/etc/wireguard/$device.conf" | cut -d/ -f1)"
+    client_ip6="$(awk '/AllowedIPs[[:space:]]*=/ {print $4; exit}' "/etc/wireguard/$device.conf" | cut -d/ -f1)"
   fi
-  if [ -z "$client_ip" ]; then
-    return 0
-  fi
-  while IFS= read -r rule; do
-    case "$rule" in
-      *" -s $client_ip/32 "*"-j MASQUERADE"*)
-        spec="${rule#-A POSTROUTING }"
-        # shellcheck disable=SC2086
-        iptables -t nat -D POSTROUTING $spec >/dev/null 2>&1 || true
-        ;;
-    esac
-  done <<EOF_RULES
+  if [ -n "$client_ip" ] && command -v iptables >/dev/null 2>&1; then
+    while IFS= read -r rule; do
+      case "$rule" in
+        *" -s $client_ip/32 "*"-j MASQUERADE"*)
+          spec="${rule#-A POSTROUTING }"
+          # shellcheck disable=SC2086
+          iptables -t nat -D POSTROUTING $spec >/dev/null 2>&1 || true
+          ;;
+      esac
+    done <<EOF_RULES
 $(iptables -t nat -S POSTROUTING 2>/dev/null || true)
 EOF_RULES
+  fi
+  if [ -n "$client_ip6" ] && command -v ip6tables >/dev/null 2>&1; then
+    while IFS= read -r rule; do
+      case "$rule" in
+        *" -s $client_ip6/128 "*"-j MASQUERADE"*)
+          spec="${rule#-A POSTROUTING }"
+          # shellcheck disable=SC2086
+          ip6tables -t nat -D POSTROUTING $spec >/dev/null 2>&1 || true
+          ;;
+      esac
+    done <<EOF_RULES
+$(ip6tables -t nat -S POSTROUTING 2>/dev/null || true)
+EOF_RULES
+  fi
 }
 
 stop_legacy_pid() {

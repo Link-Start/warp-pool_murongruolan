@@ -1,5 +1,22 @@
 # 更新日志
 
+## 未发布
+
+## v0.1.11
+
+- 新增 `dual` 双模式部署：同一个出口节点同时提供 direct 和 WARP 两个本地代理端口。
+- `warppool deploy` / `warppool deploy-token` 支持选择 `dual/direct+warp`，并对两个本地端口做占用检测。
+- `warppool ping` 在 dual 模式下会分别检测 direct 和 WARP 两个代理端口。
+- Clash 导出会为 dual 节点生成 direct 和 WARP 两个代理条目。
+- 修复 `warppool node remove` / `wpl node remove` 只删除节点记录但不刷新本地代理，导致端口继续被占用的问题。
+- `node remove` 现在会先输出所选节点信息，并要求 `y/N` 确认，默认 `N`；确认后会刷新/停止本地代理并默认清理本地 WireGuard 客户端配置。
+- 新增纯 IPv6 出口节点 `direct` 模式支持：IPv6 WireGuard endpoint 自动加中括号，自动生成 IPv6 隧道地址，并在节点侧开启 IPv6 forwarding 与 `ip6tables` MASQUERADE。
+- Pull/Deploy Token 安装脚本会正确格式化 IPv6 字面量主服务器 URL，并优先使用支持 IPv6 的公网端点检测。
+- Debian/Ubuntu 安装流程遇到失效的 `*-backports` apt 源时，会备份并禁用对应源条目后自动重试，避免 Debian 11 纯 IPv6 小鸡因过期 backports 源直接部署失败。
+- 优化 WARP 转发安装：官方 WARP SOCKS 端口短暂未就绪时会等待重试；Debian/Ubuntu 节点优先使用系统仓库 `redsocks` 做 SOCKS 透明转发，减少纯 IPv6 小鸡因无法访问 GitHub API 而下载 sing-box 失败的问题。
+- `singbox_install.sh` 查询 GitHub latest API 失败时会回退到固定 sing-box 版本直链，避免仅因 GitHub API 不通直接中断。
+- 修复新增节点后重启本地代理时，旧 dual 节点的 WARP 端口未被识别为已托管端口，导致误报 `address already in use` 的问题。
+
 ## v0.1.10
 
 - 新增短命令 `wpl`，等效于 `warppool`，例如 `wpl node list`、`wpl ping nat01`。

@@ -86,6 +86,11 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 		if err := config.CheckPortAvailable(opts.Node.BindHost, opts.Node.LocalPort); err != nil {
 			return cfg, PushResult{}, err
 		}
+		if opts.Node.ExitMode == config.ExitModeDual {
+			if err := config.CheckPortAvailable(opts.Node.BindHost, opts.Node.WarpLocalPort); err != nil {
+				return cfg, PushResult{}, fmt.Errorf("warp local port: %w", err)
+			}
+		}
 	}
 
 	result := PushResult{Node: opts.Node}
@@ -94,7 +99,7 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 		Endpoint:         opts.WGEndpoint,
 		EndpointPort:     opts.WGEndpointPort,
 		ListenPort:       opts.WGListenPort,
-		EnableForwarding: opts.Node.ExitMode == config.ExitModeDirect && !opts.SkipForwarding,
+		EnableForwarding: (opts.Node.ExitMode == config.ExitModeDirect || opts.Node.ExitMode == config.ExitModeDual) && !opts.SkipForwarding,
 	}
 
 	if opts.DryRun {
@@ -113,9 +118,13 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 		result.Logs = append(result.Logs, fmt.Sprintf("dry-run: write WireGuard config /etc/wireguard/%s.conf", wgPlan.Device))
 		result.Logs = append(result.Logs, fmt.Sprintf("dry-run: run wg-quick up %s", wgPlan.Device))
 		if wgOptions.EnableForwarding {
-			result.Logs = append(result.Logs, "dry-run: enable IPv4 forwarding and direct MASQUERADE")
+			if wgPlan.EnableIPv6Forwarding {
+				result.Logs = append(result.Logs, "dry-run: enable IPv4/IPv6 forwarding and direct MASQUERADE")
+			} else {
+				result.Logs = append(result.Logs, "dry-run: enable IPv4 forwarding and direct MASQUERADE")
+			}
 		}
-		if opts.Node.ExitMode == config.ExitModeWarp {
+		if opts.Node.ExitMode == config.ExitModeWarp || opts.Node.ExitMode == config.ExitModeDual {
 			result.Logs = append(result.Logs, fmt.Sprintf("dry-run: enable WARP forwarding for %s", wgPlan.Device))
 		}
 		return cfg, result, nil
@@ -187,7 +196,7 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	if err := configureRemoteWireGuard(runner, wgPlan, opts.RemoteDir, opts.SkipWGUp, &result); err != nil {
 		return cfg, result, err
 	}
-	if opts.Node.ExitMode == config.ExitModeWarp && !opts.SkipWGUp {
+	if (opts.Node.ExitMode == config.ExitModeWarp || opts.Node.ExitMode == config.ExitModeDual) && !opts.SkipWGUp {
 		reportProgress(opts.Progress, "configure_warp")
 		if err := configureRemoteWarpForwarding(runner, wgPlan, opts.RemoteDir, opts.WarpPort, &result); err != nil {
 			return cfg, result, err
@@ -271,7 +280,11 @@ func configureRemoteWarpForwarding(runner RemoteRunner, plan wireguard.Plan, rem
 	if warpPort == 0 {
 		warpPort = 14000
 	}
-	command := warpForwardCommand(plan, remoteDir, warpPort)
+	clientAddr := plan.ClientAddress
+	if plan.DualMode && plan.WarpClientAddress != "" {
+		clientAddr = plan.WarpClientAddress
+	}
+	command := warpForwardCommandForClient(plan, remoteDir, warpPort, clientAddr)
 	remoteResult, err := runner.Run(command)
 	if remoteResult.Stdout != "" {
 		result.Logs = append(result.Logs, remoteResult.Stdout)
@@ -397,13 +410,15 @@ func nodeModeSSHCommand(opts ModeSwitchOptions) string {
 		language = "en"
 	}
 	return fmt.Sprintf(
-		"bash %s %s %s %s %s %s %s %s %s %s",
+		"bash %s %s %s %s %s %s %s %s %s %s %s %s",
 		shellPath(scriptPath),
 		shellPath("mode="+opts.TargetMode),
 		shellPath("node="+opts.Node.Name),
 		shellPath("device="+opts.Node.WGDevice),
 		shellPath("client_addr="+opts.Node.WGClientAddress),
 		shellPath("server_addr="+opts.Node.WGServerAddress),
+		shellPath("client_ipv6_addr="+opts.Node.WGClientIPv6Address),
+		shellPath("server_ipv6_addr="+opts.Node.WGServerIPv6Address),
 		shellPath("warp_install="+opts.WarpInstall),
 		shellPath("remove_warp="+removeWarp),
 		shellPath(fmt.Sprintf("transparent_port=%d", opts.WarpPort)),
@@ -412,6 +427,10 @@ func nodeModeSSHCommand(opts ModeSwitchOptions) string {
 }
 
 func warpForwardCommand(plan wireguard.Plan, remoteDir string, warpPort int) string {
+	return warpForwardCommandForClient(plan, remoteDir, warpPort, plan.ClientAddress)
+}
+
+func warpForwardCommandForClient(plan wireguard.Plan, remoteDir string, warpPort int, clientAddress string) string {
 	scriptPath := filepath.ToSlash(filepath.Join(remoteDir, "warp_forward.sh"))
 	return fmt.Sprintf(
 		"if [ -x %s ]; then bash %s %s %s %s %s %s; else echo '[WarpPool][warp-forward][ERROR] warp_forward.sh not found in deploy assets' >&2; exit 1; fi",
@@ -419,7 +438,7 @@ func warpForwardCommand(plan wireguard.Plan, remoteDir string, warpPort int) str
 		shellPath(scriptPath),
 		shellPath("action=up"),
 		shellPath("device="+plan.Device),
-		shellPath("client_addr="+plan.ClientAddress),
+		shellPath("client_addr="+clientAddress),
 		shellPath("server_addr="+plan.ServerAddress),
 		shellPath(fmt.Sprintf("transparent_port=%d", warpPort)),
 	)
@@ -468,10 +487,18 @@ func configureRemoteWireGuard(runner RemoteRunner, plan wireguard.Plan, remoteDi
 		return err
 	}
 	if plan.EnableForwarding {
-		if _, err := runner.Run("mkdir -p /etc/sysctl.d && printf 'net.ipv4.ip_forward=1\\n' >/etc/sysctl.d/99-warppool.conf && sysctl -w net.ipv4.ip_forward=1"); err != nil {
+		command := "mkdir -p /etc/sysctl.d && printf 'net.ipv4.ip_forward=1\\n' >/etc/sysctl.d/99-warppool.conf && sysctl -w net.ipv4.ip_forward=1"
+		if plan.EnableIPv6Forwarding {
+			command = "mkdir -p /etc/sysctl.d && printf 'net.ipv4.ip_forward=1\\nnet.ipv6.conf.all.forwarding=1\\n' >/etc/sysctl.d/99-warppool.conf && sysctl -w net.ipv4.ip_forward=1 && sysctl -w net.ipv6.conf.all.forwarding=1"
+		}
+		if _, err := runner.Run(command); err != nil {
 			return err
 		}
-		result.Logs = append(result.Logs, "enabled IPv4 forwarding")
+		if plan.EnableIPv6Forwarding {
+			result.Logs = append(result.Logs, "enabled IPv4/IPv6 forwarding")
+		} else {
+			result.Logs = append(result.Logs, "enabled IPv4 forwarding")
+		}
 	}
 
 	remotePath := "/etc/wireguard/" + plan.Device + ".conf"
@@ -585,13 +612,13 @@ func wireGuardPreflightCommand(opts wireGuardPreflightOptions) string {
 }
 
 func detectEgressInterface(runner RemoteRunner) (string, error) {
-	result, err := runner.Run("ip route show default 0.0.0.0/0 | awk 'NR==1 {for (i=1;i<=NF;i++) if ($i==\"dev\") {print $(i+1); exit}}'")
+	result, err := runner.Run("(ip route show default 0.0.0.0/0 2>/dev/null; ip -6 route show default 2>/dev/null) | awk 'NR==1 {for (i=1;i<=NF;i++) if ($i==\"dev\") {print $(i+1); exit}}'")
 	if err != nil {
 		return "", err
 	}
 	iface := strings.TrimSpace(result.Stdout)
 	if iface == "" {
-		return "", fmt.Errorf("cannot detect default egress interface")
+		return "", fmt.Errorf("cannot detect default IPv4/IPv6 egress interface")
 	}
 	return iface, nil
 }

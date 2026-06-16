@@ -55,7 +55,7 @@ usage() {
 WarpPool node installer
 
 Usage:
-  bash install.sh [mode=direct|warp] [token=xxx] [server=http://host:port] [server_host=host] [server_port=8080] [endpoint=host] [wg_listen_port=51820] [wg_endpoint_port=51820] [base_url=https://...] [--dry-run]
+  bash install.sh [mode=direct|warp|dual] [token=xxx] [server=http://host:port] [server_host=host] [server_port=8080] [endpoint=host] [wg_listen_port=51820] [wg_endpoint_port=51820] [base_url=https://...] [--dry-run]
 
 Examples:
   bash install.sh
@@ -146,8 +146,31 @@ is_ipv4_literal() {
   return 0
 }
 
+is_ipv6_literal() {
+  local value="$1"
+  value="${value#[}"
+  value="${value%]}"
+  case "$value" in
+    *:*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+format_http_host() {
+  local value="$1"
+  value="${value#[}"
+  value="${value%]}"
+  if is_ipv6_literal "$value"; then
+    printf '[%s]\n' "$value"
+    return 0
+  fi
+  printf '%s\n' "$value"
+}
+
 default_registration_port_for_host() {
-  if is_ipv4_literal "$1"; then
+  if is_ipv4_literal "$1" || is_ipv6_literal "$1"; then
     printf '8080\n'
     return 0
   fi
@@ -162,10 +185,10 @@ require_root() {
 
 validate_mode() {
   case "$MODE" in
-    direct|warp)
+    direct|warp|dual)
       ;;
     *)
-      fail_i "unsupported mode: $MODE, expected direct or warp" "不支持的模式：$MODE，应为 direct 或 warp"
+      fail_i "unsupported mode: $MODE, expected direct, warp, or dual" "不支持的模式：$MODE，应为 direct、warp 或 dual"
       ;;
   esac
 }
@@ -239,6 +262,7 @@ choose_mode() {
     fi
     printf '  1. direct\n' >/dev/tty
     printf '  2. warp\n' >/dev/tty
+    printf '  3. dual/direct+warp\n' >/dev/tty
     printf '%s' "$(text "Select [1]: " "选择 [1]: ")" >/dev/tty
     read -r choice </dev/tty
     case "$choice" in
@@ -248,6 +272,10 @@ choose_mode() {
         ;;
       2)
         MODE="warp"
+        return 0
+        ;;
+      3)
+        MODE="dual"
         return 0
         ;;
       *)
@@ -261,7 +289,7 @@ choose_registration_server() {
   if [ -n "$SERVER" ] || [ -n "$SERVER_HOST" ]; then
     if [ -z "$SERVER" ]; then
       validate_port_value "$SERVER_PORT" || fail "invalid server port: $SERVER_PORT"
-      SERVER="http://$SERVER_HOST:$SERVER_PORT"
+      SERVER="http://$(format_http_host "$SERVER_HOST"):$SERVER_PORT"
     fi
     return 0
   fi
@@ -293,7 +321,7 @@ choose_registration_server() {
     port="${port:-$SERVER_PORT}"
     if validate_port_value "$port"; then
       SERVER_PORT="$port"
-      SERVER="http://$SERVER_HOST:$SERVER_PORT"
+      SERVER="http://$(format_http_host "$SERVER_HOST"):$SERVER_PORT"
       break
     fi
     printf '[WarpPool] %s\n' "$(text "invalid port, enter a number between 1 and 65535" "端口无效，请输入 1 到 65535 之间的数字")" >/dev/tty

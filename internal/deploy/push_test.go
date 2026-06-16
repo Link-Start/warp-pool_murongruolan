@@ -64,6 +64,35 @@ func TestPushDryRunWarpSkipsDirectForwarding(t *testing.T) {
 	}
 }
 
+func TestPushDryRunDualConfiguresDirectAndWarpForwarding(t *testing.T) {
+	cfg := config.Default()
+	_, result, err := Push(cfg, PushOptions{
+		DryRun:        true,
+		SkipPortCheck: true,
+		WGEndpoint:    "203.0.113.1",
+		Node: config.Node{
+			Name:          "nat1",
+			ExitMode:      config.ExitModeDual,
+			Proxy:         config.ProxyMixed,
+			BindHost:      "127.0.0.1",
+			LocalPort:     10013,
+			WarpLocalPort: 10014,
+		},
+	})
+	if err != nil {
+		t.Fatalf("push dry-run dual: %v", err)
+	}
+	if !containsLog(result.Logs, "dry-run: enable IPv4 forwarding and direct MASQUERADE") {
+		t.Fatalf("expected direct forwarding dry-run log, got %#v", result.Logs)
+	}
+	if !containsLog(result.Logs, "dry-run: enable WARP forwarding") {
+		t.Fatalf("expected warp forwarding dry-run log, got %#v", result.Logs)
+	}
+	if result.Node.WGWarpClientAddress == "" {
+		t.Fatalf("expected warp WireGuard client metadata: %#v", result.Node)
+	}
+}
+
 func TestPushDryRunRejectsDuplicatePort(t *testing.T) {
 	cfg := config.Default()
 	var err error
@@ -201,10 +230,12 @@ func TestInstallRemoteNodeUninstallerCommandPathEscapesRemoteDir(t *testing.T) {
 func TestNodeModeSSHCommandIncludesMetadata(t *testing.T) {
 	command := nodeModeSSHCommand(ModeSwitchOptions{
 		Node: config.Node{
-			Name:            "nat1",
-			WGDevice:        "wpnat1",
-			WGServerAddress: "10.200.0.1/30",
-			WGClientAddress: "10.200.0.2/30",
+			Name:                "nat1",
+			WGDevice:            "wpnat1",
+			WGServerAddress:     "10.200.0.1/30",
+			WGClientAddress:     "10.200.0.2/30",
+			WGServerIPv6Address: "fd7a:7761:7270::1/126",
+			WGClientIPv6Address: "fd7a:7761:7270::2/126",
 		},
 		TargetMode:  config.ExitModeWarp,
 		RemoteDir:   "/tmp/custom dir",
@@ -218,6 +249,8 @@ func TestNodeModeSSHCommandIncludesMetadata(t *testing.T) {
 		"'device=wpnat1'",
 		"'client_addr=10.200.0.2/30'",
 		"'server_addr=10.200.0.1/30'",
+		"'client_ipv6_addr=fd7a:7761:7270::2/126'",
+		"'server_ipv6_addr=fd7a:7761:7270::1/126'",
 		"'warp_install=reuse'",
 		"'lang=en'",
 	} {

@@ -40,6 +40,24 @@ func TestBuildProxyConfigRestartIgnoresAllConfiguredNodePorts(t *testing.T) {
 	}
 }
 
+func TestBuildProxyConfigRestartIgnoresDualWarpPort(t *testing.T) {
+	ln := listenOnLocalhost(t)
+	defer ln.Close()
+
+	node := testProxyNode("双模式1", 10021)
+	node.ExitMode = config.ExitModeDual
+	node.WarpLocalPort = ln.Addr().(*net.TCPAddr).Port
+	node.WGWarpClientAddress = "10.200.0.3/32"
+	node.WGWarpClientPrivateKey = "warp-client-private-key"
+
+	cfg := config.Default()
+	cfg.Nodes = []config.Node{node}
+
+	if _, err := buildProxyConfig(cfg, singbox.Options{}, proxyConfigRestart, nil); err != nil {
+		t.Fatalf("restart config should ignore already managed dual warp port: %v", err)
+	}
+}
+
 func TestBuildProxyConfigStrictRejectsBusyNodePort(t *testing.T) {
 	ln := listenOnLocalhost(t)
 	defer ln.Close()

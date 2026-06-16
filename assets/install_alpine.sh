@@ -11,6 +11,10 @@ DRY_RUN="false"
 NODE_EXIT_MODE=""
 SERVER_URL_FOR_STATE=""
 NODE_NAME=""
+WG_WARP_CLIENT_ADDR=""
+WG_SERVER_IPV6_ADDR=""
+WG_CLIENT_IPV6_ADDR=""
+WG_WARP_CLIENT_IPV6_ADDR=""
 LANGUAGE="${WARPPOOL_LANG:-${WARPOOL_LANG:-en}}"
 
 log() {
@@ -136,7 +140,7 @@ maybe_install_warp() {
     return 0
   fi
 
-  if [ "$MODE" != "warp" ]; then
+  if [ "$MODE" != "warp" ] && [ "$MODE" != "dual" ]; then
     fail "unsupported mode: $MODE"
   fi
 
@@ -153,9 +157,18 @@ detect_endpoint() {
   if [ -n "$ENDPOINT" ]; then
     return 0
   fi
-  ENDPOINT="$(curl --max-time 10 -fsSL https://api.ipify.org || true)"
+  ENDPOINT="$(curl --max-time 10 -fsSL https://api64.ipify.org || true)"
   if [ -z "$ENDPOINT" ]; then
-    ENDPOINT="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+    ENDPOINT="$(curl --max-time 10 -fsSL https://api.ipify.org || true)"
+  fi
+  if [ -z "$ENDPOINT" ]; then
+    ENDPOINT="$(curl --max-time 10 -fsSL https://api6.ipify.org || true)"
+  fi
+  if [ -z "$ENDPOINT" ]; then
+    ENDPOINT="$(ip -6 -o addr show scope global 2>/dev/null | awk 'NR==1 {split($4,a,"/"); print a[1]; exit}' || true)"
+  fi
+  if [ -z "$ENDPOINT" ]; then
+    ENDPOINT="$(hostname -I 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i !~ /^fe80:/) {print $i; exit}}' || true)"
   fi
   [ -n "$ENDPOINT" ] || fail "cannot detect public endpoint; rerun with endpoint=<ip>"
 }
@@ -186,6 +199,10 @@ load_prepare_response() {
   WG_DEVICE_B64=""
   WG_SERVER_ADDR_B64=""
   WG_CLIENT_ADDR_B64=""
+  WG_SERVER_IPV6_ADDR_B64=""
+  WG_CLIENT_IPV6_ADDR_B64=""
+  WG_WARP_CLIENT_ADDR_B64=""
+  WG_WARP_CLIENT_IPV6_ADDR_B64=""
   NODE_EXIT_MODE_B64=""
   SERVER_CONFIG_B64=""
   eval "$response"
@@ -196,6 +213,10 @@ load_prepare_response() {
   WG_DEVICE="$(printf '%s' "$WG_DEVICE_B64" | decode_b64)"
   WG_SERVER_ADDR="$(printf '%s' "$WG_SERVER_ADDR_B64" | decode_b64)"
   WG_CLIENT_ADDR="$(printf '%s' "$WG_CLIENT_ADDR_B64" | decode_b64)"
+  WG_SERVER_IPV6_ADDR="$(printf '%s' "$WG_SERVER_IPV6_ADDR_B64" | decode_b64)"
+  WG_CLIENT_IPV6_ADDR="$(printf '%s' "$WG_CLIENT_IPV6_ADDR_B64" | decode_b64)"
+  WG_WARP_CLIENT_ADDR="$(printf '%s' "$WG_WARP_CLIENT_ADDR_B64" | decode_b64)"
+  WG_WARP_CLIENT_IPV6_ADDR="$(printf '%s' "$WG_WARP_CLIENT_IPV6_ADDR_B64" | decode_b64)"
   NODE_EXIT_MODE="$(printf '%s' "$NODE_EXIT_MODE_B64" | decode_b64)"
   [ -z "$NODE_EXIT_MODE" ] || MODE="$NODE_EXIT_MODE"
 }
@@ -227,7 +248,7 @@ write_remote_config() {
   [ -n "$SERVER_CONFIG" ] || fail "register prepare response missing server_config"
   [ -n "$WG_DEVICE" ] || fail "register prepare response missing node.wg_device"
 
-  if [ "$MODE" = "direct" ]; then
+  if [ "$MODE" = "direct" ] || [ "$MODE" = "dual" ]; then
     SERVER_CONFIG="$(append_direct_forwarding_hooks "$SERVER_CONFIG")"
   fi
 
@@ -265,6 +286,10 @@ write_node_state() {
   "wg_device": "$WG_DEVICE",
   "wg_server_address": "$WG_SERVER_ADDR",
   "wg_client_address": "$WG_CLIENT_ADDR",
+  "wg_server_ipv6_address": "$WG_SERVER_IPV6_ADDR",
+  "wg_client_ipv6_address": "$WG_CLIENT_IPV6_ADDR",
+  "wg_warp_client_address": "$WG_WARP_CLIENT_ADDR",
+  "wg_warp_client_ipv6_address": "$WG_WARP_CLIENT_IPV6_ADDR",
   "last_mode": "$MODE",
   "language": "$LANGUAGE"
 }
@@ -274,17 +299,26 @@ EOF
 }
 
 detect_egress_interface() {
-  ip route show default 0.0.0.0/0 | awk 'NR==1 {for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}'
+  (ip route show default 0.0.0.0/0 2>/dev/null; ip -6 route show default 2>/dev/null) | awk 'NR==1 {for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}'
+}
+
+has_ipv6_wireguard() {
+  [ -n "$WG_CLIENT_IPV6_ADDR" ] && [ -n "$WG_SERVER_IPV6_ADDR" ]
 }
 
 append_direct_forwarding_hooks() {
   local config_text="$1"
-  local egress client_ip post_up post_down
+  local egress client_ip client_ip6 post_up post_down
   egress="$(detect_egress_interface)"
-  [ -n "$egress" ] || fail "cannot detect default egress interface"
+  [ -n "$egress" ] || fail "cannot detect default IPv4/IPv6 egress interface"
   client_ip="${WG_CLIENT_ADDR%%/*}"
   post_up="PostUp = sysctl -w net.ipv4.ip_forward=1; iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -i %i -j ACCEPT; iptables -C FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -C POSTROUTING -s $client_ip/32 -o $egress -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s $client_ip/32 -o $egress -j MASQUERADE"
   post_down="PostDown = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; iptables -D FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true; iptables -t nat -D POSTROUTING -s $client_ip/32 -o $egress -j MASQUERADE 2>/dev/null || true"
+  if has_ipv6_wireguard; then
+    client_ip6="${WG_CLIENT_IPV6_ADDR%%/*}"
+    post_up="$post_up; sysctl -w net.ipv6.conf.all.forwarding=1; ip6tables -C FORWARD -i %i -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -i %i -j ACCEPT; ip6tables -C FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT; ip6tables -t nat -C POSTROUTING -s $client_ip6/128 -o $egress -j MASQUERADE 2>/dev/null || ip6tables -t nat -A POSTROUTING -s $client_ip6/128 -o $egress -j MASQUERADE"
+    post_down="$post_down; ip6tables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; ip6tables -D FORWARD -o %i -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true; ip6tables -t nat -D POSTROUTING -s $client_ip6/128 -o $egress -j MASQUERADE 2>/dev/null || true"
+  fi
   printf '%s\n' "$config_text" | awk -v post_up="$post_up" -v post_down="$post_down" '
     /^\[Peer\][[:space:]]*$/ && !inserted {
       print post_up
@@ -312,31 +346,44 @@ start_remote_wireguard() {
 }
 
 enable_direct_forwarding() {
-  if [ "$MODE" != "direct" ]; then
+  if [ "$MODE" != "direct" ] && [ "$MODE" != "dual" ]; then
     return 0
   fi
-  local egress client_ip
+  local egress client_ip client_ip6
   egress="$(detect_egress_interface)"
-  [ -n "$egress" ] || fail "cannot detect default egress interface"
+  [ -n "$egress" ] || fail "cannot detect default IPv4/IPv6 egress interface"
   client_ip="${WG_CLIENT_ADDR%%/*}"
   if [ "$DRY_RUN" = "true" ]; then
-    log "dry-run: enable IPv4 forwarding and MASQUERADE via $egress"
+    log "dry-run: enable IPv4/IPv6 forwarding and MASQUERADE via $egress"
     return 0
   fi
   sysctl -w net.ipv4.ip_forward=1
   iptables -C FORWARD -i "$WG_DEVICE" -j ACCEPT 2>/dev/null || iptables -A FORWARD -i "$WG_DEVICE" -j ACCEPT
   iptables -C FORWARD -o "$WG_DEVICE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -o "$WG_DEVICE" -m state --state RELATED,ESTABLISHED -j ACCEPT
   iptables -t nat -C POSTROUTING -s "$client_ip/32" -o "$egress" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s "$client_ip/32" -o "$egress" -j MASQUERADE
+  if has_ipv6_wireguard; then
+    client_ip6="${WG_CLIENT_IPV6_ADDR%%/*}"
+    sysctl -w net.ipv6.conf.all.forwarding=1
+    ip6tables -C FORWARD -i "$WG_DEVICE" -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -i "$WG_DEVICE" -j ACCEPT
+    ip6tables -C FORWARD -o "$WG_DEVICE" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -o "$WG_DEVICE" -m state --state RELATED,ESTABLISHED -j ACCEPT
+    ip6tables -t nat -C POSTROUTING -s "$client_ip6/128" -o "$egress" -j MASQUERADE 2>/dev/null || ip6tables -t nat -A POSTROUTING -s "$client_ip6/128" -o "$egress" -j MASQUERADE
+  fi
 }
 
 maybe_enable_warp_forwarding() {
-  if [ "$MODE" != "warp" ]; then
+  if [ "$MODE" != "warp" ] && [ "$MODE" != "dual" ]; then
     return 0
   fi
   local dir
+  local warp_client_addr
   dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
   [ -r "$dir/warp_forward.sh" ] || fail "WARP forward helper not found: $dir/warp_forward.sh"
-  run bash "$dir/warp_forward.sh" action=up "device=$WG_DEVICE" "client_addr=$WG_CLIENT_ADDR" "server_addr=$WG_SERVER_ADDR" backend=wireguard
+  warp_client_addr="$WG_CLIENT_ADDR"
+  if [ "$MODE" = "dual" ]; then
+    [ -n "$WG_WARP_CLIENT_ADDR" ] || fail "dual mode missing wg_warp_client_address from server"
+    warp_client_addr="$WG_WARP_CLIENT_ADDR"
+  fi
+  run bash "$dir/warp_forward.sh" action=up "device=$WG_DEVICE" "client_addr=$warp_client_addr" "server_addr=$WG_SERVER_ADDR" backend=wireguard
 }
 
 register_node() {

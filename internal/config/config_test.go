@@ -58,7 +58,7 @@ func TestValidateLanguage(t *testing.T) {
 }
 
 func TestValidateExitMode(t *testing.T) {
-	for _, mode := range []string{ExitModeDirect, ExitModeWarp} {
+	for _, mode := range []string{ExitModeDirect, ExitModeWarp, ExitModeDual} {
 		if err := ValidateExitMode(mode); err != nil {
 			t.Fatalf("expected valid mode %s: %v", mode, err)
 		}
@@ -66,6 +66,46 @@ func TestValidateExitMode(t *testing.T) {
 
 	if err := ValidateExitMode("warp-only"); err == nil {
 		t.Fatal("expected invalid exit mode")
+	}
+}
+
+func TestValidateNodeRejectsDuplicateDualWarpPort(t *testing.T) {
+	cfg := Default()
+	cfg.Nodes = append(cfg.Nodes, Node{
+		Name:          "nat1",
+		ExitMode:      ExitModeDual,
+		Proxy:         ProxyMixed,
+		BindHost:      "127.0.0.1",
+		LocalPort:     10013,
+		WarpLocalPort: 10014,
+	})
+
+	node := Node{
+		Name:      "nat2",
+		ExitMode:  ExitModeDirect,
+		Proxy:     ProxyMixed,
+		BindHost:  "127.0.0.1",
+		LocalPort: 10014,
+	}
+
+	if err := ValidateNode(cfg, node); err == nil {
+		t.Fatal("expected duplicate dual warp port error")
+	}
+}
+
+func TestValidateNodeRejectsDualSameLocalPorts(t *testing.T) {
+	cfg := Default()
+	node := Node{
+		Name:          "nat1",
+		ExitMode:      ExitModeDual,
+		Proxy:         ProxyMixed,
+		BindHost:      "127.0.0.1",
+		LocalPort:     10013,
+		WarpLocalPort: 10013,
+	}
+
+	if err := ValidateNode(cfg, node); err == nil {
+		t.Fatal("expected dual same local ports error")
 	}
 }
 
