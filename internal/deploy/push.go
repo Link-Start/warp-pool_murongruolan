@@ -224,6 +224,10 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	return next, result, err
 }
 
+func IsSSHHostKeyVerificationError(err error) bool {
+	return sshclient.IsHostKeyVerificationError(err)
+}
+
 func ApplySSHMetadata(node config.Node, ssh SSHOptions) config.Node {
 	if strings.TrimSpace(ssh.Host) != "" {
 		node.SSHHost = strings.TrimSpace(ssh.Host)

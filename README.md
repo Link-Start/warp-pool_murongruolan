@@ -212,7 +212,7 @@ WireGuard public endpoint port: 51820
 
 WarpPool automatically writes the WireGuard endpoint as `[2001:db8::10]:51820` and adds an IPv6 ULA address pair to the tunnel. The exit node enables IPv6 forwarding and `ip6tables` MASQUERADE for direct IPv6 egress. If the main server registration listener itself uses a literal IPv6 address, generated URLs use `http://[IPv6]:port`; using an AAAA domain is still recommended for easier operation.
 
-By default, SSH host key verification is enabled. If the default `known_hosts` file does not exist during interactive deployment, WarpPool asks whether to skip SSH HostKey verification for this deployment. For non-interactive deployment or temporary tests, pass:
+By default, SSH host key verification is enabled. During interactive deployment, WarpPool asks whether to skip SSH HostKey verification if the default `known_hosts` file does not exist or the target host key is not yet trusted by `known_hosts`. For non-interactive deployment or temporary tests, pass:
 
 ```bash
 warppool deploy \

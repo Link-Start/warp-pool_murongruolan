@@ -2,10 +2,13 @@
 
 ## 未发布
 
+## v0.1.12
+
 - 新增 SSH Push 共享出口节点布局。多台主服务器可以部署到同一个出口节点；出口节点只维护一个共享 WireGuard 设备 `wpshared`，后续部署会追加 peer，不再覆盖已有 peer。
 - WARP 转发支持同一个远端 WireGuard 设备下的多个 WARP 客户端地址，shared `warp` / `dual` Push 部署可以复用出口节点上的同一份 WARP 运行时。
 - 增加保守兼容保护：检测到旧 `/etc/wireguard/wp*.conf` 独占布局时不会自动转换，避免误伤已有可用节点。
 - 共享 Push 节点禁用旧式 node mode 切换，避免影响其他主服务器正在使用的远端规则；需要同时使用 direct/WARP 时建议直接部署 `dual` 模式。
+- 修复交互式 SSH Push 部署时，`known_hosts` 文件存在但目标主机 HostKey 尚未收录会直接失败的问题；现在会询问本次是否跳过 HostKey 校验并重试。
 
 ## v0.1.11
 

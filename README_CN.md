@@ -196,7 +196,7 @@ WireGuard 公网端点端口: 51820
 
 WarpPool 会自动把 WireGuard endpoint 写成 `[2001:db8::10]:51820`，并为隧道增加一组 IPv6 ULA 地址。出口节点会开启 IPv6 forwarding，并通过 `ip6tables` MASQUERADE 实现 direct IPv6 出口。如果主服务器注册监听也使用 IPv6 字面量，生成的 URL 会使用 `http://[IPv6]:端口` 格式；实际使用时更推荐绑定 AAAA 域名。
 
-默认开启 SSH HostKey 校验。如果交互部署时默认 `known_hosts` 文件不存在，WarpPool 会询问本次部署是否跳过 SSH HostKey 校验。非交互部署或临时测试时可以显式传入：
+默认开启 SSH HostKey 校验。交互部署时，如果默认 `known_hosts` 文件不存在，或目标主机 HostKey 尚未被 `known_hosts` 信任，WarpPool 会询问本次部署是否跳过 SSH HostKey 校验。非交互部署或临时测试时可以显式传入：
 
 ```bash
 warppool deploy \

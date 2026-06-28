@@ -2,10 +2,13 @@
 
 ## Unreleased
 
+## v0.1.12
+
 - Added shared SSH Push exit-node layout. Multiple main servers can now deploy to the same exit node; the node keeps one shared WireGuard device (`wpshared`) and appends peers instead of overwriting existing peers.
 - WARP forwarding now supports multiple WARP client addresses on the same remote WireGuard device, so shared `warp` / `dual` Push deployments can reuse one WARP runtime on the exit node.
 - Added a conservative legacy safeguard: old `/etc/wireguard/wp*.conf` exclusive layouts are not converted automatically, avoiding accidental disruption of existing nodes.
 - Disabled old node mode switching for shared Push nodes to avoid changing remote rules used by other main servers; use `dual` deployment when both direct and WARP ports are needed.
+- Fixed interactive SSH Push deployment when `known_hosts` exists but does not yet trust the target host key. WarpPool now asks whether to skip HostKey verification for this run and retries.
 
 ## v0.1.11
 

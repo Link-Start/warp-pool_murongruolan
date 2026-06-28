@@ -549,6 +549,32 @@ func runNodeModeSSH(cmd *cobra.Command, path string, cfg config.Config, node con
 		AutoStartProxy: true,
 		Language:       opts.Language,
 	})
+	if err != nil && deploy.IsSSHHostKeyVerificationError(err) && !opts.SSH.InsecureIgnoreHostKey {
+		skip, askErr := opts.Prompt.askBool(
+			tr(opts.Language, "SSH host key is not trusted by known_hosts. Skip SSH HostKey verification for this mode switch?", "SSH HostKey 不在 known_hosts 信任记录中。本次切换是否跳过 SSH HostKey 校验？"),
+			false,
+			true,
+		)
+		if askErr != nil {
+			return askErr
+		}
+		if skip {
+			opts.SSH.InsecureIgnoreHostKey = true
+			result, err = deploy.SwitchModeSSH(deploy.ModeSwitchOptions{
+				SSH:            opts.SSH,
+				Node:           node,
+				TargetMode:     targetMode,
+				RemoteDir:      opts.RemoteDir,
+				AssetsDir:      resolveAssetsDir(opts.AssetsDir),
+				WarpInstall:    opts.WarpInstall,
+				RemoveWarp:     opts.RemoveWarp,
+				DryRun:         opts.DryRun,
+				WarpPort:       opts.WarpPort,
+				AutoStartProxy: true,
+				Language:       opts.Language,
+			})
+		}
+	}
 	for _, item := range result.Logs {
 		item = strings.TrimSpace(item)
 		if item == "" {
