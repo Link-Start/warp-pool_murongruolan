@@ -54,6 +54,7 @@ Application
 
 - WireGuard tunnel generation and deployment
 - SSH Push deployment for exit nodes
+- Shared Push exit nodes: multiple main servers can reuse the same exit node without overwriting each other
 - Optional Cloudflare WARP egress
 - `dual` mode: one node can provide both direct and WARP egress ports
 - User-defined local proxy ports
@@ -192,6 +193,15 @@ WireGuard ports are split into two values:
 
 Push mode asks for the SSH port, the node-side WireGuard listen port, and the public WireGuard mapped port. NAT nodes commonly use non-standard SSH and UDP mapped ports, so enter the real forwarded ports from your provider.
 
+Push deployment uses a shared exit-node WireGuard layout by default. The exit node keeps one remote WireGuard device named `wpshared`; when another main server deploys to the same exit node, WarpPool appends a new peer instead of overwriting existing peers. This allows, for example, a Hong Kong main server and a US main server to use the same small NAT exit node.
+
+Notes for shared Push nodes:
+
+- Use the same node-side WireGuard listen port / public endpoint port for all main servers.
+- Each main server still chooses its own local proxy ports.
+- WARP is installed and run once on the exit node; multiple main servers share that WARP runtime.
+- Legacy one-main-server WireGuard configs are not converted automatically. If the node already has old `/etc/wireguard/wp*.conf` configs, clean it with `wpl-node-uninstall` or use a fresh node before shared deployment.
+
 IPv6-only exit nodes are supported for `direct` mode when the main server can reach the node over IPv6. Enter bare IPv6 addresses in interactive fields:
 
 ```text
@@ -202,7 +212,7 @@ WireGuard public endpoint port: 51820
 
 WarpPool automatically writes the WireGuard endpoint as `[2001:db8::10]:51820` and adds an IPv6 ULA address pair to the tunnel. The exit node enables IPv6 forwarding and `ip6tables` MASQUERADE for direct IPv6 egress. If the main server registration listener itself uses a literal IPv6 address, generated URLs use `http://[IPv6]:port`; using an AAAA domain is still recommended for easier operation.
 
-By default, SSH host key verification is enabled. If the default `known_hosts` file does not exist during interactive deployment, WarpPool asks whether to skip SSH HostKey verification for this deployment. For non-interactive deployment or temporary tests, pass:
+By default, SSH host key verification is enabled. During interactive deployment, WarpPool asks whether to skip SSH HostKey verification if the default `known_hosts` file does not exist or the target host key is not yet trusted by `known_hosts`. For non-interactive deployment or temporary tests, pass:
 
 ```bash
 warppool deploy \
@@ -335,6 +345,7 @@ Notes:
 
 - `dual` uses the same remote WireGuard listen port, so NAT VPS users do not need a second UDP mapping.
 - The exit node routes by WireGuard client source address: the direct address goes to the node network, and the WARP address goes to Cloudflare WARP.
+- In shared Push deployment, each main server receives its own direct/WARP WireGuard client addresses, while the exit node still uses one shared WireGuard device and one WARP runtime.
 - IPv6-only exit nodes can use `dual`; enter the node's bare IPv6 address when the main server connects to the node. The direct port exits through the node's IPv6 network, while the WARP port exits through Cloudflare WARP.
 - `warppool ping <node>` checks both local proxy ports in dual mode.
 - Existing single-mode nodes cannot become dual by changing local config only. Redeploy the node, or later use the configuration refresh flow to push dual WireGuard metadata.
@@ -538,6 +549,7 @@ wpl-node-uninstall
 Common usage on the exit node:
 
 ```bash
+wpl-node-uninstall device=wpshared # Remove the shared Push WireGuard device
 wpl-node-uninstall device=wpnat01 # Remove one WarpPool WireGuard device
 wpl-node-uninstall all=true # Remove all WarpPool WireGuard devices on this node
 wpl-node-uninstall all=true remove_warp=true # Also remove/clean WARP runtime
@@ -616,4 +628,5 @@ The script checks the working tree, updates `VERSION`, creates a Chinese commit,
 - No database.
 - No multi-user permission model.
 - No remote Agent.
+- Shared multi-main-server exit-node reuse is currently implemented for SSH Push deployment. Pull / Deploy Token keep the original single-registration flow for now.
 - `upgrade` updates the main binary and bundled installer assets. Existing config is preserved.

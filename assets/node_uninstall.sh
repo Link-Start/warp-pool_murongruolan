@@ -262,6 +262,42 @@ EOF_RULES
 $(ip6tables -t nat -S POSTROUTING 2>/dev/null || true)
 EOF_RULES
   fi
+
+  if [ "$device" = "wpshared" ] && [ -d /etc/warppool-node/shared ]; then
+    local shared_ip
+    if [ -r /etc/warppool-node/shared/wpshared.direct-v4.txt ] && command -v iptables >/dev/null 2>&1; then
+      while IFS= read -r shared_ip; do
+        [ -n "$shared_ip" ] || continue
+        while IFS= read -r rule; do
+          case "$rule" in
+            *" -s $shared_ip/32 "*"-j MASQUERADE"*)
+              spec="${rule#-A POSTROUTING }"
+              # shellcheck disable=SC2086
+              iptables -t nat -D POSTROUTING $spec >/dev/null 2>&1 || true
+              ;;
+          esac
+        done <<EOF_RULES
+$(iptables -t nat -S POSTROUTING 2>/dev/null || true)
+EOF_RULES
+      done </etc/warppool-node/shared/wpshared.direct-v4.txt
+    fi
+    if [ -r /etc/warppool-node/shared/wpshared.direct-v6.txt ] && command -v ip6tables >/dev/null 2>&1; then
+      while IFS= read -r shared_ip; do
+        [ -n "$shared_ip" ] || continue
+        while IFS= read -r rule; do
+          case "$rule" in
+            *" -s $shared_ip/128 "*"-j MASQUERADE"*)
+              spec="${rule#-A POSTROUTING }"
+              # shellcheck disable=SC2086
+              ip6tables -t nat -D POSTROUTING $spec >/dev/null 2>&1 || true
+              ;;
+          esac
+        done <<EOF_RULES
+$(ip6tables -t nat -S POSTROUTING 2>/dev/null || true)
+EOF_RULES
+      done </etc/warppool-node/shared/wpshared.direct-v6.txt
+    fi
+  fi
 }
 
 stop_legacy_pid() {
@@ -291,7 +327,7 @@ remove_warp_forwarding() {
   fi
   stop_legacy_pid "/var/lib/warppool/warp-forward/$device.pid"
   delete_nat_redirect_rules "$device"
-  run rm -f "/var/lib/warppool/warp-forward/$device.json" "/var/lib/warppool/warp-forward/$device.log"
+  run rm -f "/var/lib/warppool/warp-forward/$device.json" "/var/lib/warppool/warp-forward/$device.log" "/var/lib/warppool/warp-forward/$device.clients"
 }
 
 remove_wireguard_device() {
@@ -302,6 +338,9 @@ remove_wireguard_device() {
     run ip link delete dev "$device" >/dev/null 2>&1 || true
   fi
   run rm -f "/etc/wireguard/$device.conf"
+  if [ "$device" = "wpshared" ]; then
+    run rm -rf /etc/warppool-node/shared /etc/warppool-node/shared.lock
+  fi
 }
 
 remaining_warppool_configs() {

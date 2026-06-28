@@ -252,6 +252,12 @@ func newNodeModeCommand() *cobra.Command {
 					"当前 node mode 切换不会改写 dual 双模式 WireGuard 通道；请重新部署该节点，或后续使用配置刷新流程重新下发",
 				))
 			}
+			if node.WGDevice == "wpshared" {
+				return fmt.Errorf("%s", tr(language,
+					"this node uses the shared exit-node layout; node mode switching is disabled to avoid affecting other main servers. Deploy it as dual if you need both direct and WARP ports.",
+					"当前节点使用共享出口节点布局；为避免影响其他主服务器，已禁用 node mode 切换。如需同时使用 direct 和 WARP，请按 dual 模式重新部署。",
+				))
+			}
 			if warpInstall == "" {
 				warpInstall = config.WarpInstallAuto
 			}
@@ -543,6 +549,32 @@ func runNodeModeSSH(cmd *cobra.Command, path string, cfg config.Config, node con
 		AutoStartProxy: true,
 		Language:       opts.Language,
 	})
+	if err != nil && deploy.IsSSHHostKeyVerificationError(err) && !opts.SSH.InsecureIgnoreHostKey {
+		skip, askErr := opts.Prompt.askBool(
+			tr(opts.Language, "SSH host key is not trusted by known_hosts. Skip SSH HostKey verification for this mode switch?", "SSH HostKey 不在 known_hosts 信任记录中。本次切换是否跳过 SSH HostKey 校验？"),
+			false,
+			true,
+		)
+		if askErr != nil {
+			return askErr
+		}
+		if skip {
+			opts.SSH.InsecureIgnoreHostKey = true
+			result, err = deploy.SwitchModeSSH(deploy.ModeSwitchOptions{
+				SSH:            opts.SSH,
+				Node:           node,
+				TargetMode:     targetMode,
+				RemoteDir:      opts.RemoteDir,
+				AssetsDir:      resolveAssetsDir(opts.AssetsDir),
+				WarpInstall:    opts.WarpInstall,
+				RemoveWarp:     opts.RemoveWarp,
+				DryRun:         opts.DryRun,
+				WarpPort:       opts.WarpPort,
+				AutoStartProxy: true,
+				Language:       opts.Language,
+			})
+		}
+	}
 	for _, item := range result.Logs {
 		item = strings.TrimSpace(item)
 		if item == "" {

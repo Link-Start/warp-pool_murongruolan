@@ -217,6 +217,82 @@ func TestWarpForwardCommandIncludesServerAddress(t *testing.T) {
 	}
 }
 
+func TestSharedWireGuardCommandIncludesClientKeys(t *testing.T) {
+	command := sharedWireGuardCommand(sharedWireGuardCommandOptions{
+		RemoteDir:           "/tmp/custom dir",
+		Mode:                config.ExitModeDual,
+		Device:              "wpshared",
+		ListenPort:          51820,
+		ServerAddress:       "10.200.0.1/24",
+		ServerIPv6Address:   "fd7a:7761:7270::1/64",
+		EnableIPv6:          true,
+		EgressInterface:     "eth0",
+		ClientPublicKey:     "client-key",
+		WarpClientPublicKey: "warp-client-key",
+	})
+	for _, want := range []string{
+		"'/tmp/custom dir/shared_node.sh'",
+		"'action=add'",
+		"'mode=dual'",
+		"'device=wpshared'",
+		"'listen_port=51820'",
+		"'server_addr=10.200.0.1/24'",
+		"'server_ipv6_addr=fd7a:7761:7270::1/64'",
+		"'enable_ipv6=true'",
+		"'egress=eth0'",
+		"'client_public_key=client-key'",
+		"'warp_client_public_key=warp-client-key'",
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("shared WireGuard command missing %q:\n%s", want, command)
+		}
+	}
+}
+
+func TestParseSharedWireGuardResponse(t *testing.T) {
+	response, err := parseSharedWireGuardResponse(`uploaded: /tmp/warppool-install/shared_node.sh
+WARPPOOL_SHARED_BEGIN
+DEVICE=wpshared
+LISTEN_PORT=51820
+SERVER_PUBLIC_KEY=server-key
+SERVER_ADDRESS=10.200.0.1/24
+CLIENT_ADDRESS=10.200.0.2/32
+SERVER_IPV6_ADDRESS=fd7a:7761:7270::1/64
+CLIENT_IPV6_ADDRESS=fd7a:7761:7270::2/128
+WARP_CLIENT_ADDRESS=10.200.0.3/32
+WARP_CLIENT_IPV6_ADDRESS=fd7a:7761:7270::3/128
+WARPPOOL_SHARED_END`)
+	if err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if response.Device != "wpshared" || response.ServerPublicKey != "server-key" || response.ClientAddress != "10.200.0.2/32" {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+	if response.WarpClientIPv6Address != "fd7a:7761:7270::3/128" {
+		t.Fatalf("unexpected warp IPv6 address: %#v", response)
+	}
+}
+
+func TestSharedServerAddressSkipsUsedCBlock(t *testing.T) {
+	cfg := config.Default()
+	var err error
+	cfg, err = config.AddNode(cfg, config.Node{
+		Name:            "old",
+		ExitMode:        config.ExitModeDirect,
+		Proxy:           config.ProxyMixed,
+		BindHost:        "127.0.0.1",
+		LocalPort:       10001,
+		WGServerAddress: "10.200.0.1/24",
+		WGClientAddress: "10.200.0.2/32",
+	})
+	if err != nil {
+		t.Fatalf("add node: %v", err)
+	}
+	if got := sharedServerAddress(cfg); got != "10.200.1.1/24" {
+		t.Fatalf("unexpected shared server address: %s", got)
+	}
+}
+
 func TestInstallRemoteNodeUninstallerCommandPathEscapesRemoteDir(t *testing.T) {
 	command := installRemoteNodeUninstallerCommand("/tmp/custom dir")
 	if !strings.Contains(command, "'/tmp/custom dir/node_uninstall.sh'") {

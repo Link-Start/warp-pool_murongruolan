@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -164,6 +165,15 @@ func hostKeyCallback(cfg Config) (ssh.HostKeyCallback, error) {
 		return nil, fmt.Errorf("parse known_hosts file %s: %w", path, err)
 	}
 	return callback, nil
+}
+
+func IsHostKeyVerificationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "knownhosts: key is unknown") ||
+		strings.Contains(message, "knownhosts: key mismatch")
 }
 
 func DefaultKnownHostsPath() string {

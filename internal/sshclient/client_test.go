@@ -44,3 +44,21 @@ func TestHostKeyCallbackParsesKnownHostsFile(t *testing.T) {
 		t.Fatal("expected callback")
 	}
 }
+
+func TestIsHostKeyVerificationError(t *testing.T) {
+	if !IsHostKeyVerificationError(assertError("connect ssh example:22: ssh: handshake failed: knownhosts: key is unknown")) {
+		t.Fatal("expected unknown key error to match")
+	}
+	if !IsHostKeyVerificationError(assertError("connect ssh example:22: ssh: handshake failed: knownhosts: key mismatch")) {
+		t.Fatal("expected key mismatch error to match")
+	}
+	if IsHostKeyVerificationError(assertError("connect ssh example:22: connection refused")) {
+		t.Fatal("did not expect connection refused to match")
+	}
+}
+
+type assertError string
+
+func (e assertError) Error() string {
+	return string(e)
+}

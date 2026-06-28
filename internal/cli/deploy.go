@@ -64,6 +64,25 @@ func newDeployCommand() *cobra.Command {
 			opts.Progress = progress.Update
 			next, result, err := deploy.Push(cfg, opts)
 			if err != nil {
+				if deploy.IsSSHHostKeyVerificationError(err) && !opts.SSH.InsecureIgnoreHostKey {
+					progress.Success("")
+					skip, askErr := prompt.askBool(
+						tr(language, "SSH host key is not trusted by known_hosts. Skip SSH HostKey verification for this deploy?", "SSH HostKey 不在 known_hosts 信任记录中。本次部署是否跳过 SSH HostKey 校验？"),
+						false,
+						true,
+					)
+					if askErr != nil {
+						return askErr
+					}
+					if skip {
+						opts.SSH.InsecureIgnoreHostKey = true
+						progress = newProgressReporter(cmd.OutOrStdout(), language)
+						opts.Progress = progress.Update
+						next, result, err = deploy.Push(cfg, opts)
+					}
+				}
+			}
+			if err != nil {
 				progress.Fail(tr(language, "Deploy failed. Full output:", "部署失败，完整输出如下："), result.Logs, err)
 				return err
 			}
@@ -129,9 +148,11 @@ func newDeployCommand() *cobra.Command {
 	cmd.Flags().IntVar(&opts.WarpPort, "warp-forward-port", 14000, "remote transparent TCP redirect port for warp mode")
 	cmd.Flags().BoolVar(&opts.SkipWGUp, "skip-wg-up", false, "write WireGuard config but do not start it")
 	cmd.Flags().BoolVar(&opts.SkipForwarding, "skip-forwarding", false, "skip direct-mode IPv4 forwarding and NAT rules")
+	cmd.Flags().BoolVar(&opts.ExclusiveNode, "exclusive-node", false, "use legacy one-main-server-per-node WireGuard layout")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "validate and show deploy plan without SSH")
 	cmd.Flags().BoolVar(&opts.SkipPortCheck, "skip-port-check", false, "skip system port availability check")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "print full deploy logs after successful deploy")
+	_ = cmd.Flags().MarkHidden("exclusive-node")
 
 	return cmd
 }
