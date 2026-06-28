@@ -252,6 +252,12 @@ func newNodeModeCommand() *cobra.Command {
 					"当前 node mode 切换不会改写 dual 双模式 WireGuard 通道；请重新部署该节点，或后续使用配置刷新流程重新下发",
 				))
 			}
+			if node.WGDevice == "wpshared" {
+				return fmt.Errorf("%s", tr(language,
+					"this node uses the shared exit-node layout; node mode switching is disabled to avoid affecting other main servers. Deploy it as dual if you need both direct and WARP ports.",
+					"当前节点使用共享出口节点布局；为避免影响其他主服务器，已禁用 node mode 切换。如需同时使用 direct 和 WARP，请按 dual 模式重新部署。",
+				))
+			}
 			if warpInstall == "" {
 				warpInstall = config.WarpInstallAuto
 			}

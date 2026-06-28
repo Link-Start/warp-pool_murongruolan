@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,7 @@ type PushOptions struct {
 	SkipWGUp       bool
 	SkipForwarding bool
 	SkipPortCheck  bool
+	ExclusiveNode  bool
 	WarpPort       int
 	Progress       ProgressFunc
 }
@@ -50,6 +52,8 @@ func reportProgress(progress ProgressFunc, key string, args ...string) {
 		progress(key, args...)
 	}
 }
+
+const sharedWireGuardDevice = "wpshared"
 
 func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error) {
 	if opts.RemoteDir == "" {
@@ -69,6 +73,9 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	}
 	if opts.WGEndpoint == "" {
 		opts.WGEndpoint = opts.SSH.Host
+	}
+	if opts.WGListenPort == 0 {
+		opts.WGListenPort = wireguard.DefaultListenPort
 	}
 	if opts.WGEndpointPort == 0 {
 		opts.WGEndpointPort = opts.WGListenPort
@@ -185,16 +192,26 @@ func Push(cfg config.Config, opts PushOptions) (config.Config, PushResult, error
 	}
 
 	reportProgress(opts.Progress, "generate_wireguard")
-	wgPlan, err := wireguard.BuildPlan(cfg, wgOptions)
-	if err != nil {
-		return cfg, result, err
-	}
-	opts.Node = wireguard.ApplyPlan(opts.Node, wgPlan)
-	result.Node = opts.Node
+	var wgPlan wireguard.Plan
+	if opts.ExclusiveNode {
+		wgPlan, err = wireguard.BuildPlan(cfg, wgOptions)
+		if err != nil {
+			return cfg, result, err
+		}
+		opts.Node = wireguard.ApplyPlan(opts.Node, wgPlan)
+		result.Node = opts.Node
 
-	reportProgress(opts.Progress, "configure_wireguard")
-	if err := configureRemoteWireGuard(runner, wgPlan, opts.RemoteDir, opts.SkipWGUp, &result); err != nil {
-		return cfg, result, err
+		reportProgress(opts.Progress, "configure_wireguard")
+		if err := configureRemoteWireGuard(runner, wgPlan, opts.RemoteDir, opts.SkipWGUp, &result); err != nil {
+			return cfg, result, err
+		}
+	} else {
+		reportProgress(opts.Progress, "configure_wireguard")
+		wgPlan, opts.Node, err = configureRemoteSharedWireGuard(runner, cfg, opts, wgOptions, &result)
+		if err != nil {
+			return cfg, result, err
+		}
+		result.Node = opts.Node
 	}
 	if (opts.Node.ExitMode == config.ExitModeWarp || opts.Node.ExitMode == config.ExitModeDual) && !opts.SkipWGUp {
 		reportProgress(opts.Progress, "configure_warp")
@@ -274,6 +291,291 @@ func (r RemoteRunner) Run(command string) (sshclient.Result, error) {
 		input = r.Password + "\n"
 	}
 	return r.Client.RunWithInput(wrapped, input)
+}
+
+type sharedWireGuardResponse struct {
+	Device                string
+	ListenPort            int
+	ServerPublicKey       string
+	ServerAddress         string
+	ClientAddress         string
+	ServerIPv6Address     string
+	ClientIPv6Address     string
+	WarpClientAddress     string
+	WarpClientIPv6Address string
+}
+
+func configureRemoteSharedWireGuard(runner RemoteRunner, cfg config.Config, opts PushOptions, wgOptions wireguard.Options, result *PushResult) (wireguard.Plan, config.Node, error) {
+	clientKey, err := wireguard.GenerateKeyPair()
+	if err != nil {
+		return wireguard.Plan{}, opts.Node, err
+	}
+	var warpClientKey wireguard.KeyPair
+	if opts.Node.ExitMode == config.ExitModeDual {
+		warpClientKey, err = wireguard.GenerateKeyPair()
+		if err != nil {
+			return wireguard.Plan{}, opts.Node, err
+		}
+	}
+
+	serverAddress := sharedServerAddress(cfg)
+	serverIPv6Address := ""
+	enableIPv6 := endpointIsIPv6Literal(opts.WGEndpoint)
+	if enableIPv6 {
+		serverIPv6Address = sharedServerIPv6Address(cfg)
+	}
+	command := sharedWireGuardCommand(sharedWireGuardCommandOptions{
+		RemoteDir:           opts.RemoteDir,
+		Mode:                opts.Node.ExitMode,
+		Device:              sharedWireGuardDevice,
+		ListenPort:          opts.WGListenPort,
+		ServerAddress:       serverAddress,
+		ServerIPv6Address:   serverIPv6Address,
+		EnableIPv6:          enableIPv6,
+		EgressInterface:     wgOptions.EgressInterface,
+		ClientPublicKey:     clientKey.PublicKey,
+		WarpClientPublicKey: warpClientKey.PublicKey,
+		SkipUp:              opts.SkipWGUp,
+	})
+	remoteResult, err := runner.Run(command)
+	if remoteResult.Stdout != "" {
+		result.Logs = append(result.Logs, remoteResult.Stdout)
+	}
+	if remoteResult.Stderr != "" {
+		result.Logs = append(result.Logs, remoteResult.Stderr)
+	}
+	if err != nil {
+		return wireguard.Plan{}, opts.Node, fmt.Errorf("shared WireGuard configuration failed: %w", err)
+	}
+
+	response, err := parseSharedWireGuardResponse(remoteResult.Stdout)
+	if err != nil {
+		return wireguard.Plan{}, opts.Node, err
+	}
+	if response.ListenPort == 0 {
+		response.ListenPort = opts.WGListenPort
+	}
+	if response.Device == "" {
+		response.Device = sharedWireGuardDevice
+	}
+
+	plan := wireguard.Plan{
+		Device:                response.Device,
+		ListenPort:            response.ListenPort,
+		Endpoint:              wireguard.FormatEndpoint(opts.WGEndpoint, opts.WGEndpointPort),
+		EgressInterface:       wgOptions.EgressInterface,
+		EnableForwarding:      wgOptions.EnableForwarding,
+		EnableIPv6Forwarding:  wgOptions.EnableForwarding && response.ServerIPv6Address != "",
+		IPv6Enabled:           response.ServerIPv6Address != "",
+		DualMode:              opts.Node.ExitMode == config.ExitModeDual,
+		ServerAddress:         response.ServerAddress,
+		ClientAddress:         response.ClientAddress,
+		ServerIPv6Address:     response.ServerIPv6Address,
+		ClientIPv6Address:     response.ClientIPv6Address,
+		WarpClientAddress:     response.WarpClientAddress,
+		WarpClientIPv6Address: response.WarpClientIPv6Address,
+		ServerPublicKey:       response.ServerPublicKey,
+		ClientPrivateKey:      clientKey.PrivateKey,
+		ClientPublicKey:       clientKey.PublicKey,
+		WarpClientPrivateKey:  warpClientKey.PrivateKey,
+		WarpClientPublicKey:   warpClientKey.PublicKey,
+	}
+	plan.ClientConfig = wireguard.RenderClientConfig(plan)
+	if plan.DualMode {
+		plan.WarpClientConfig = wireguard.RenderWarpClientConfig(plan)
+	}
+
+	node := wireguard.ApplyPlan(opts.Node, plan)
+	result.Logs = append(result.Logs, "shared WireGuard peer registered: "+plan.Device)
+	return plan, node, nil
+}
+
+type sharedWireGuardCommandOptions struct {
+	RemoteDir           string
+	Mode                string
+	Device              string
+	ListenPort          int
+	ServerAddress       string
+	ServerIPv6Address   string
+	EnableIPv6          bool
+	EgressInterface     string
+	ClientPublicKey     string
+	WarpClientPublicKey string
+	SkipUp              bool
+}
+
+func sharedWireGuardCommand(opts sharedWireGuardCommandOptions) string {
+	scriptPath := filepath.ToSlash(filepath.Join(opts.RemoteDir, "shared_node.sh"))
+	enableIPv6 := "false"
+	if opts.EnableIPv6 {
+		enableIPv6 = "true"
+	}
+	skipUp := "false"
+	if opts.SkipUp {
+		skipUp = "true"
+	}
+	args := []string{
+		shellPath("action=add"),
+		shellPath("mode=" + opts.Mode),
+		shellPath("device=" + opts.Device),
+		shellPath(fmt.Sprintf("listen_port=%d", opts.ListenPort)),
+		shellPath("server_addr=" + opts.ServerAddress),
+		shellPath("enable_ipv6=" + enableIPv6),
+		shellPath("client_public_key=" + opts.ClientPublicKey),
+		shellPath("skip_up=" + skipUp),
+	}
+	if opts.ServerIPv6Address != "" {
+		args = append(args, shellPath("server_ipv6_addr="+opts.ServerIPv6Address))
+	}
+	if opts.EgressInterface != "" {
+		args = append(args, shellPath("egress="+opts.EgressInterface))
+	}
+	if opts.WarpClientPublicKey != "" {
+		args = append(args, shellPath("warp_client_public_key="+opts.WarpClientPublicKey))
+	}
+	return fmt.Sprintf(
+		"if [ -x %s ]; then bash %s %s; else echo '[WarpPool][shared-node][ERROR] shared_node.sh not found in deploy assets' >&2; exit 1; fi",
+		shellPath(scriptPath),
+		shellPath(scriptPath),
+		strings.Join(args, " "),
+	)
+}
+
+func parseSharedWireGuardResponse(output string) (sharedWireGuardResponse, error) {
+	var response sharedWireGuardResponse
+	inBlock := false
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		switch line {
+		case "WARPPOOL_SHARED_BEGIN":
+			inBlock = true
+			continue
+		case "WARPPOOL_SHARED_END":
+			inBlock = false
+			continue
+		}
+		if !inBlock || line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "DEVICE":
+			response.Device = value
+		case "LISTEN_PORT":
+			if _, err := fmt.Sscanf(value, "%d", &response.ListenPort); err != nil {
+				return response, fmt.Errorf("parse shared WireGuard listen port %q: %w", value, err)
+			}
+		case "SERVER_PUBLIC_KEY":
+			response.ServerPublicKey = value
+		case "SERVER_ADDRESS":
+			response.ServerAddress = value
+		case "CLIENT_ADDRESS":
+			response.ClientAddress = value
+		case "SERVER_IPV6_ADDRESS":
+			response.ServerIPv6Address = value
+		case "CLIENT_IPV6_ADDRESS":
+			response.ClientIPv6Address = value
+		case "WARP_CLIENT_ADDRESS":
+			response.WarpClientAddress = value
+		case "WARP_CLIENT_IPV6_ADDRESS":
+			response.WarpClientIPv6Address = value
+		}
+	}
+	if response.ServerPublicKey == "" || response.ServerAddress == "" || response.ClientAddress == "" {
+		return response, fmt.Errorf("shared WireGuard response missing required fields")
+	}
+	return response, nil
+}
+
+func sharedServerAddress(cfg config.Config) string {
+	cidr := strings.TrimSpace(cfg.Defaults.CIDR)
+	if cidr == "" {
+		cidr = config.Default().Defaults.CIDR
+	}
+	ip, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil || ip.To4() == nil || ipNet == nil {
+		return "10.200.0.1/24"
+	}
+	network := ipNet.IP.To4()
+	if network == nil {
+		return "10.200.0.1/24"
+	}
+	used := usedIPv4CBlocks(cfg)
+	for third := int(network[2]); third <= 255; third++ {
+		candidate := net.IPv4(network[0], network[1], byte(third), 1)
+		if !ipNet.Contains(candidate) {
+			break
+		}
+		prefix := fmt.Sprintf("%d.%d.%d", network[0], network[1], third)
+		if used[prefix] {
+			continue
+		}
+		return fmt.Sprintf("%s.1/24", prefix)
+	}
+	return fmt.Sprintf("%d.%d.%d.1/24", network[0], network[1], network[2])
+}
+
+func usedIPv4CBlocks(cfg config.Config) map[string]bool {
+	used := map[string]bool{}
+	for _, node := range cfg.Nodes {
+		markNodeIPv4CBlocks(used, node)
+	}
+	for _, token := range cfg.Tokens {
+		if token.Used {
+			continue
+		}
+		markNodeIPv4CBlocks(used, token.Node)
+	}
+	return used
+}
+
+func markNodeIPv4CBlocks(used map[string]bool, node config.Node) {
+	for _, value := range []string{
+		node.WGServerAddress,
+		node.WGClientAddress,
+		node.WGWarpClientAddress,
+		node.WGAddress,
+	} {
+		host := strings.TrimSpace(strings.Split(value, "/")[0])
+		if host == "" {
+			continue
+		}
+		ip := net.ParseIP(host).To4()
+		if ip == nil {
+			continue
+		}
+		used[fmt.Sprintf("%d.%d.%d", ip[0], ip[1], ip[2])] = true
+	}
+}
+
+func sharedServerIPv6Address(cfg config.Config) string {
+	cidr := strings.TrimSpace(cfg.Defaults.CIDR6)
+	if cidr == "" {
+		cidr = config.Default().Defaults.CIDR6
+	}
+	ip, _, err := net.ParseCIDR(cidr)
+	if err != nil || ip.To16() == nil || ip.To4() != nil {
+		return "fd7a:7761:7270::1/64"
+	}
+	base := ip.To16()
+	base[len(base)-1] = 1
+	return net.IP(base).String() + "/64"
+}
+
+func endpointIsIPv6Literal(endpoint string) bool {
+	host := strings.TrimSpace(endpoint)
+	if host == "" {
+		return false
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	ip := net.ParseIP(host)
+	return ip != nil && ip.To4() == nil
 }
 
 func configureRemoteWarpForwarding(runner RemoteRunner, plan wireguard.Plan, remoteDir string, warpPort int, result *PushResult) error {

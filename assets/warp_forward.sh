@@ -183,12 +183,48 @@ validate_args() {
 
   SAFE_DEVICE="$DEVICE"
   CONFIG_PATH="$STATE_DIR/$SAFE_DEVICE.json"
+  CLIENTS_PATH="$STATE_DIR/$SAFE_DEVICE.clients"
   PID_PATH="$STATE_DIR/$SAFE_DEVICE.pid"
   LOG_PATH="$STATE_DIR/$SAFE_DEVICE.log"
   UNIT_NAME="warppool-warp-forward-$SAFE_DEVICE.service"
   UNIT_PATH="/etc/systemd/system/$UNIT_NAME"
   OPENRC_NAME="warppool-warp-forward-$SAFE_DEVICE"
   OPENRC_PATH="/etc/init.d/$OPENRC_NAME"
+}
+
+register_client() {
+  mkdir -p "$STATE_DIR"
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: register WARP forwarding client $CLIENT_IP in $CLIENTS_PATH"
+    return 0
+  fi
+  touch "$CLIENTS_PATH"
+  chmod 0600 "$CLIENTS_PATH"
+  if ! grep -Fxq "$CLIENT_IP" "$CLIENTS_PATH" 2>/dev/null; then
+    printf '%s\n' "$CLIENT_IP" >>"$CLIENTS_PATH"
+  fi
+}
+
+unregister_client() {
+  if [ "$DRY_RUN" = "true" ]; then
+    log "dry-run: unregister WARP forwarding client $CLIENT_IP from $CLIENTS_PATH"
+    return 0
+  fi
+  [ -r "$CLIENTS_PATH" ] || return 0
+  local tmp
+  tmp="$(mktemp)"
+  grep -Fxv "$CLIENT_IP" "$CLIENTS_PATH" >"$tmp" || true
+  cat "$tmp" >"$CLIENTS_PATH"
+  rm -f "$tmp"
+  chmod 0600 "$CLIENTS_PATH"
+}
+
+client_rule_loop_add() {
+  printf 'if [ -r %s ]; then while read ip; do [ -n "$ip" ] || continue; iptables -t nat -C PREROUTING -i %s -s "$ip/32" -p tcp -j REDIRECT --to-ports %s 2>/dev/null || iptables -t nat -A PREROUTING -i %s -s "$ip/32" -p tcp -j REDIRECT --to-ports %s; done < %s; fi' "$CLIENTS_PATH" "$DEVICE" "$TRANSPARENT_PORT" "$DEVICE" "$TRANSPARENT_PORT" "$CLIENTS_PATH"
+}
+
+client_rule_loop_delete_all() {
+  printf 'if [ -r %s ]; then while read ip; do [ -n "$ip" ] || continue; while iptables -t nat -C PREROUTING -i %s -s "$ip/32" -p tcp -j REDIRECT --to-ports %s >/dev/null 2>&1; do iptables -t nat -D PREROUTING -i %s -s "$ip/32" -p tcp -j REDIRECT --to-ports %s; done; done < %s; fi' "$CLIENTS_PATH" "$DEVICE" "$TRANSPARENT_PORT" "$DEVICE" "$TRANSPARENT_PORT" "$CLIENTS_PATH"
 }
 
 script_dir() {
@@ -824,12 +860,19 @@ openrc_available() {
   command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1 && [ -d /etc/init.d ]
 }
 
+clients_remaining() {
+  [ -r "$CLIENTS_PATH" ] || return 1
+  grep -Eq '[^[:space:]]' "$CLIENTS_PATH"
+}
+
 start_singbox() {
-  local exec_start command_path command_args
+  local exec_start command_path command_args add_client_rules delete_client_rules
+  add_client_rules="$(client_rule_loop_add)"
+  delete_client_rules="$(client_rule_loop_delete_all)"
   if systemd_available; then
     if [ "$DRY_RUN" = "true" ]; then
       log "dry-run: write systemd unit: $UNIT_PATH"
-      log "dry-run: systemctl enable --now $UNIT_NAME"
+      log "dry-run: systemctl enable/restart $UNIT_NAME"
       return 0
     fi
 
@@ -843,9 +886,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStartPre=/bin/sh -c 'iptables -C INPUT -i $DEVICE -p tcp -j ACCEPT 2>/dev/null || iptables -A INPUT -i $DEVICE -p tcp -j ACCEPT'
-ExecStartPre=/bin/sh -c 'iptables -t nat -C PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT 2>/dev/null || iptables -t nat -A PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT'
+ExecStartPre=/bin/sh -c '$add_client_rules'
 ExecStart=$exec_start
-ExecStopPost=/bin/sh -c 'while iptables -t nat -C PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT >/dev/null 2>&1; do iptables -t nat -D PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT; done; while iptables -C INPUT -i $DEVICE -p tcp -j ACCEPT >/dev/null 2>&1; do iptables -D INPUT -i $DEVICE -p tcp -j ACCEPT; done'
+ExecStopPost=/bin/sh -c '$delete_client_rules; while iptables -C INPUT -i $DEVICE -p tcp -j ACCEPT >/dev/null 2>&1; do iptables -D INPUT -i $DEVICE -p tcp -j ACCEPT; done'
 Restart=on-failure
 RestartSec=3
 
@@ -853,7 +896,12 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    systemctl enable --now "$UNIT_NAME"
+    if systemctl is-active --quiet "$UNIT_NAME"; then
+      systemctl restart "$UNIT_NAME"
+      systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || true
+    else
+      systemctl enable --now "$UNIT_NAME"
+    fi
     return 0
   fi
 
@@ -883,13 +931,11 @@ depend() {
 
 start_pre() {
   iptables -C INPUT -i $DEVICE -p tcp -j ACCEPT 2>/dev/null || iptables -A INPUT -i $DEVICE -p tcp -j ACCEPT
-  iptables -t nat -C PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT 2>/dev/null || iptables -t nat -A PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT
+  $add_client_rules
 }
 
 stop_post() {
-  while iptables -t nat -C PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT >/dev/null 2>&1; do
-    iptables -t nat -D PREROUTING -i $DEVICE -s $CLIENT_IP/32 -p tcp -j REDIRECT --to-ports $TRANSPARENT_PORT
-  done
+  $delete_client_rules
   while iptables -C INPUT -i $DEVICE -p tcp -j ACCEPT >/dev/null 2>&1; do
     iptables -D INPUT -i $DEVICE -p tcp -j ACCEPT
   done
@@ -956,6 +1002,14 @@ stop_singbox() {
 add_iptables_rules() {
   require_command iptables
   run iptables -C INPUT -i "$DEVICE" -p tcp -j ACCEPT 2>/dev/null || run iptables -A INPUT -i "$DEVICE" -p tcp -j ACCEPT
+  if [ -r "$CLIENTS_PATH" ]; then
+    local ip
+    while IFS= read -r ip; do
+      [ -n "$ip" ] || continue
+      run iptables -t nat -C PREROUTING -i "$DEVICE" -s "$ip/32" -p tcp -j REDIRECT --to-ports "$TRANSPARENT_PORT" 2>/dev/null || run iptables -t nat -A PREROUTING -i "$DEVICE" -s "$ip/32" -p tcp -j REDIRECT --to-ports "$TRANSPARENT_PORT"
+    done <"$CLIENTS_PATH"
+    return 0
+  fi
   run iptables -t nat -C PREROUTING -i "$DEVICE" -s "$CLIENT_IP/32" -p tcp -j REDIRECT --to-ports "$TRANSPARENT_PORT" 2>/dev/null || run iptables -t nat -A PREROUTING -i "$DEVICE" -s "$CLIENT_IP/32" -p tcp -j REDIRECT --to-ports "$TRANSPARENT_PORT"
 }
 
@@ -988,6 +1042,7 @@ main() {
     up)
       select_warp_backend
       write_singbox_config
+      register_client
       start_singbox
       add_iptables_rules
       status
@@ -995,8 +1050,14 @@ main() {
       ;;
     down)
       delete_iptables_rules
-      stop_singbox
-      log "WARP forwarding disabled for $DEVICE"
+      unregister_client
+      if clients_remaining; then
+        add_iptables_rules
+        log "WARP forwarding client removed for $DEVICE; other shared clients remain"
+      else
+        stop_singbox
+        log "WARP forwarding disabled for $DEVICE"
+      fi
       ;;
     status)
       status
